@@ -1,0 +1,271 @@
+import { nowIso } from "../database/ids";
+import type { createRepositories } from "../database/repositories";
+import {
+  TelegramConfigurationError,
+  getTelegramBot,
+  resolveConfiguredAgent,
+  type TelegramConfig,
+} from "./config";
+import { normalizeTelegramUpdate } from "./normalize";
+import type {
+  NormalizedTelegramUpdate,
+  TelegramInboundResult,
+} from "./types";
+
+type TelegramRepositories = ReturnType<typeof createRepositories>;
+
+function titleFromMessage(text: string): string {
+  const compact = text.replace(/\s+/gu, " ").trim();
+  const characters = Array.from(compact);
+  return `Telegram discussion: ${characters.slice(0, 80).join("") || "Untitled"}`;
+}
+
+function mentionedAgentId(
+  config: TelegramConfig,
+  text: string,
+): string | null {
+  const mentions = text.matchAll(/@([a-z0-9_]{5,32})/giu);
+  for (const mention of mentions) {
+    const agentId = (() => {
+      for (const bot of config.bots.values()) {
+        if (bot.username === mention[1].toLowerCase()) {
+          return bot.agentId;
+        }
+      }
+      return null;
+    })();
+    if (agentId !== null) {
+      return agentId;
+    }
+  }
+
+  return null;
+}
+
+function replyAgentId(
+  config: TelegramConfig,
+  update: NormalizedTelegramUpdate,
+  repliedMessageAgentId: string | null,
+): string | null {
+  if (repliedMessageAgentId !== null) {
+    return repliedMessageAgentId;
+  }
+  const configuredReplyAgentId = update.replyTo
+    ? resolveConfiguredAgent(config, {
+        telegramUserId: update.replyTo.senderTelegramUserId,
+        username: update.replyTo.senderUsername,
+      })
+    : null;
+  if (configuredReplyAgentId !== null) {
+    return configuredReplyAgentId;
+  }
+
+  return mentionedAgentId(config, update.text);
+}
+
+export interface TelegramInboundDependencies {
+  readonly repositories: TelegramRepositories;
+  readonly config: TelegramConfig;
+  readonly now?: () => string;
+}
+
+export class TelegramInboundService {
+  private readonly now: () => string;
+
+  constructor(private readonly dependencies: TelegramInboundDependencies) {
+    this.now = dependencies.now ?? nowIso;
+  }
+
+  async ingest(
+    payload: unknown,
+    botAlias: string,
+    receivedAt = this.now(),
+  ): Promise<TelegramInboundResult> {
+    const bot = getTelegramBot(this.dependencies.config, botAlias);
+    if (!bot) {
+      return { status: "ignored", reason: "unknown_bot_alias" };
+    }
+    if (botAlias !== "gateway") {
+      return { status: "ignored", reason: "persona_webhook_is_not_an_ingress_bus" };
+    }
+    if (!this.dependencies.config.webhookReady || this.dependencies.config.groupId === null) {
+      throw new TelegramConfigurationError("TELEGRAM_GROUP_ID and TELEGRAM_WEBHOOK_SECRET are required");
+    }
+
+    const update = normalizeTelegramUpdate(payload);
+    if (!update) {
+      return { status: "ignored", reason: "unsupported_or_non_text_update" };
+    }
+    if (update.sender.isBot) {
+      return { status: "ignored", reason: "bot_message" };
+    }
+    if (
+      update.chat.id !== this.dependencies.config.groupId ||
+      (update.chat.type !== "group" && update.chat.type !== "supergroup")
+    ) {
+      return { status: "ignored", reason: "chat_not_configured" };
+    }
+
+    const existing = await this.dependencies.repositories.messages.findByTelegramUpdate(
+      update.updateId,
+      botAlias,
+    );
+    const jobKey = `telegram-interactive:${botAlias}:${update.updateId}`;
+    if (existing) {
+      const existingJob = await this.dependencies.repositories.jobs.getByIdempotencyKey(jobKey).catch(() => null);
+      const job = existingJob ?? await this.dependencies.repositories.jobs.create({
+        jobType: "telegram.interactive_message",
+        payload: {
+          source: "telegram",
+          updateId: update.updateId,
+          messageId: existing.id,
+          threadId: existing.threadId,
+          chatId: existing.chatId,
+          addressedAgentId: existing.metadata.addressedAgentId === null
+            ? null
+            : typeof existing.metadata.addressedAgentId === "string"
+              ? existing.metadata.addressedAgentId
+              : null,
+        },
+        idempotencyKey: jobKey,
+        dueAt: receivedAt,
+        priority: 70,
+        maxAttempts: 3,
+        chainDepth: 0,
+      });
+      return {
+        status: "duplicate",
+        messageId: existing.id,
+        threadId: existing.threadId,
+        jobId: job?.id,
+        addressedAgentId: existing.metadata.addressedAgentId === null
+          ? null
+          : typeof existing.metadata.addressedAgentId === "string"
+            ? existing.metadata.addressedAgentId
+            : null,
+      };
+    }
+
+    const chat = await this.dependencies.repositories.chats.upsertByTelegramId({
+      telegramChatId: update.chat.id,
+      chatType: update.chat.type,
+      title: update.chat.title,
+      isWorkspace: true,
+      metadata: { source: "telegram", workspace: true },
+    });
+    const user = await this.dependencies.repositories.users.upsertByExternalKey({
+      externalKey: `telegram:user:${update.sender.id}`,
+      displayName: update.sender.displayName,
+      username: update.sender.username,
+      isAdmin: this.dependencies.config.adminUserIds.has(update.sender.id),
+      metadata: {
+        source: "telegram",
+        telegramUserId: update.sender.id,
+        botAlias,
+      },
+    });
+    await this.dependencies.repositories.telegramIdentities.upsert({
+      userId: user.id,
+      telegramUserId: update.sender.id,
+      botAlias,
+      username: update.sender.username,
+      isBot: false,
+      isPrimary: true,
+      metadata: { source: "telegram", lastSeenAt: receivedAt },
+    });
+
+    const repliedMessage = update.replyTo && update.replyTo.telegramChatId === update.chat.id
+      ? await this.dependencies.repositories.messages.findByTelegramReference(
+          update.chat.id,
+          update.replyTo.telegramMessageId,
+        )
+      : null;
+    let addressedAgentId = replyAgentId(
+      this.dependencies.config,
+      update,
+      repliedMessage?.authorAgentId ?? null,
+    );
+    if (addressedAgentId === null && update.replyTo?.senderTelegramUserId !== undefined) {
+      addressedAgentId = await this.dependencies.repositories.telegramIdentities.findAgentByTelegramUserId(
+        update.replyTo.senderTelegramUserId,
+      );
+    }
+
+    let thread = repliedMessage
+      ? await this.dependencies.repositories.threads.getById(repliedMessage.threadId)
+      : update.topicId
+        ? await this.dependencies.repositories.threads.findByTelegramTopic(chat.id, update.topicId)
+        : await this.dependencies.repositories.threads.findMostRecentActiveByChat(chat.id);
+
+    if (!thread) {
+      thread = await this.dependencies.repositories.threads.create({
+        chatId: chat.id,
+        title: titleFromMessage(update.text),
+        createdByUserId: user.id,
+        telegramTopicId: update.topicId,
+        metadata: {
+          source: "telegram",
+          createdFromUpdateId: update.updateId,
+        },
+      });
+    }
+
+    await this.dependencies.repositories.threads.addParticipant(thread.id, {
+      userId: user.id,
+      role: thread.createdByUserId === user.id ? "owner" : "contributor",
+    });
+    if (addressedAgentId !== null) {
+      await this.dependencies.repositories.threads.addParticipant(thread.id, {
+        agentId: addressedAgentId,
+        role: "contributor",
+      });
+    }
+
+    const message = await this.dependencies.repositories.messages.create({
+      threadId: thread.id,
+      chatId: chat.id,
+      authorType: "human",
+      authorUserId: user.id,
+      contentText: update.text,
+      replyToMessageId: repliedMessage?.id,
+      origin: "telegram",
+      telegramChatId: update.chat.id,
+      telegramMessageId: update.messageId,
+      telegramBotAlias: botAlias,
+      telegramUpdateId: update.updateId,
+      idempotencyKey: `telegram-message:${botAlias}:${update.updateId}`,
+      metadata: {
+        telegramMessageId: update.messageId,
+        telegramUpdateId: update.updateId,
+        addressedAgentId,
+        topicId: update.topicId ?? null,
+      },
+    });
+    await this.dependencies.repositories.threads.touchActivity(thread.id, receivedAt);
+
+    const job = await this.dependencies.repositories.jobs.create({
+      jobType: "telegram.interactive_message",
+      payload: {
+        source: "telegram",
+        updateId: update.updateId,
+        messageId: message.id,
+        threadId: thread.id,
+        chatId: chat.id,
+        addressedAgentId,
+      },
+      idempotencyKey: jobKey,
+      dueAt: receivedAt,
+      priority: 70,
+      maxAttempts: 3,
+      chainDepth: 0,
+    });
+
+    return {
+      status: "accepted",
+      messageId: message.id,
+      threadId: thread.id,
+      jobId: job.id,
+      addressedAgentId,
+    };
+  }
+}

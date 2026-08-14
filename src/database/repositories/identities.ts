@@ -34,6 +34,36 @@ interface ChatRow {
   deleted_at: string | null;
 }
 
+export interface TelegramIdentityRecord {
+  readonly id: string;
+  readonly userId: string | null;
+  readonly agentId: string | null;
+  readonly telegramUserId: string;
+  readonly botAlias: string;
+  readonly username: string | null;
+  readonly isBot: boolean;
+  readonly isPrimary: boolean;
+  readonly metadata: import("../validation").JsonObject;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly deletedAt: string | null;
+}
+
+interface TelegramIdentityRow {
+  id: string;
+  user_id: string | null;
+  agent_id: string | null;
+  telegram_user_id: string;
+  bot_alias: string;
+  username: string | null;
+  is_bot: number;
+  is_primary: number;
+  metadata_json: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
 function mapUser(row: UserRow): UserRecord {
   return {
     id: row.id,
@@ -56,6 +86,23 @@ function mapChat(row: ChatRow): ChatRecord {
     title: toNullableString(row.title),
     isWorkspace: toBoolean(row.is_workspace),
     metadata: toJsonObject(row.metadata_json, "chats.metadata_json"),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: toNullableString(row.deleted_at),
+  };
+}
+
+function mapTelegramIdentity(row: TelegramIdentityRow): TelegramIdentityRecord {
+  return {
+    id: row.id,
+    userId: toNullableString(row.user_id),
+    agentId: toNullableString(row.agent_id),
+    telegramUserId: row.telegram_user_id,
+    botAlias: row.bot_alias,
+    username: toNullableString(row.username),
+    isBot: toBoolean(row.is_bot),
+    isPrimary: toBoolean(row.is_primary),
+    metadata: toJsonObject(row.metadata_json, "telegram_identities.metadata_json"),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: toNullableString(row.deleted_at),
@@ -125,6 +172,45 @@ export class UserRepository {
 
     return row ? mapUser(row) : null;
   }
+
+  async upsertByExternalKey(input: CreateUserInput & { readonly externalKey: string }): Promise<UserRecord> {
+    const externalKey = requireNonEmpty(input.externalKey, "user.externalKey");
+    const displayName = requireNonEmpty(input.displayName, "user.displayName");
+    const timestamp = nowIso();
+
+    await this.database
+      .prepare(
+        `INSERT INTO users (
+          id, external_key, display_name, username, is_admin, metadata_json,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (external_key) DO UPDATE SET
+          display_name = excluded.display_name,
+          username = excluded.username,
+          is_admin = CASE WHEN excluded.is_admin = 1 THEN 1 ELSE users.is_admin END,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at,
+          deleted_at = NULL`,
+      )
+      .bind(
+        input.id ?? createId("user"),
+        externalKey,
+        displayName,
+        input.username ?? null,
+        input.isAdmin === true ? 1 : 0,
+        encodeObject(input.metadata, "user.metadata"),
+        timestamp,
+        timestamp,
+      )
+      .run();
+
+    const user = await this.findByExternalKey(externalKey);
+    if (!user) {
+      throw new NotFoundError("user external key", externalKey);
+    }
+
+    return user;
+  }
 }
 
 export class ChatRepository {
@@ -176,6 +262,45 @@ export class ChatRepository {
       .first<ChatRow>();
 
     return row ? mapChat(row) : null;
+  }
+
+  async upsertByTelegramId(input: CreateChatInput & { readonly telegramChatId: string }): Promise<ChatRecord> {
+    const telegramChatId = requireNonEmpty(input.telegramChatId, "chat.telegramChatId");
+    const id = input.id ?? createId("chat");
+    const timestamp = nowIso();
+
+    await this.database
+      .prepare(
+        `INSERT INTO chats (
+          id, telegram_chat_id, chat_type, title, is_workspace, metadata_json,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (telegram_chat_id) DO UPDATE SET
+          chat_type = excluded.chat_type,
+          title = excluded.title,
+          is_workspace = CASE WHEN excluded.is_workspace = 1 THEN 1 ELSE chats.is_workspace END,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at,
+          deleted_at = NULL`,
+      )
+      .bind(
+        id,
+        telegramChatId,
+        input.chatType,
+        input.title ?? null,
+        input.isWorkspace === true ? 1 : 0,
+        encodeObject(input.metadata, "chat.metadata"),
+        timestamp,
+        timestamp,
+      )
+      .run();
+
+    const chat = await this.findByTelegramId(telegramChatId);
+    if (!chat) {
+      throw new NotFoundError("chat Telegram id", telegramChatId);
+    }
+
+    return chat;
   }
 }
 
@@ -235,5 +360,28 @@ export class TelegramIdentityRepository {
     }
 
     return row.id;
+  }
+
+  async findByTelegramUserId(
+    telegramUserId: string,
+    botAlias?: string,
+  ): Promise<TelegramIdentityRecord | null> {
+    const query = botAlias === undefined
+      ? "SELECT * FROM telegram_identities WHERE telegram_user_id = ? AND deleted_at IS NULL ORDER BY is_primary DESC, updated_at DESC LIMIT 1"
+      : "SELECT * FROM telegram_identities WHERE telegram_user_id = ? AND bot_alias = ? AND deleted_at IS NULL LIMIT 1";
+    const statement = this.database.prepare(query);
+    const row = botAlias === undefined
+      ? await statement.bind(telegramUserId).first<TelegramIdentityRow>()
+      : await statement.bind(telegramUserId, botAlias).first<TelegramIdentityRow>();
+
+    return row ? mapTelegramIdentity(row) : null;
+  }
+
+  async findAgentByTelegramUserId(
+    telegramUserId: string,
+    botAlias?: string,
+  ): Promise<string | null> {
+    const identity = await this.findByTelegramUserId(telegramUserId, botAlias);
+    return identity?.agentId ?? null;
   }
 }

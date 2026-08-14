@@ -7,13 +7,14 @@ import type {
 
 import { routeApi } from "./api/router";
 import { consumeAgentJobs, type AgentJobMessage } from "./jobs";
+import { handleTelegramWebhook } from "./telegram/webhook";
 
 function logScheduleTick(controller: ScheduledController): void {
   console.log(
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "01-data-and-core",
+      phase: "02-telegram",
     }),
   );
 }
@@ -21,6 +22,10 @@ function logScheduleTick(controller: ScheduledController): void {
 const handler = {
   async fetch(request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/telegram/webhook/")) {
+      return handleTelegramWebhook(request, env);
+    }
 
     if (url.pathname.startsWith("/api/")) {
       return routeApi(request, env);

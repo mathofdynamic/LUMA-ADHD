@@ -275,6 +275,7 @@ export interface CreateThreadInput {
   readonly cycleBudget?: number;
   readonly createdByUserId?: UserId;
   readonly createdByAgentId?: AgentId;
+  readonly telegramTopicId?: string;
   readonly metadata?: JsonObject;
 }
 

@@ -39,6 +39,7 @@ const migrationTables = [
   "god_directives",
   "provider_usage",
   "telegram_outbound",
+  "telegram_outbound_parts",
   "artifacts",
   "artifact_revisions",
   "audit_log",
