@@ -14,7 +14,7 @@
   // intentionally absent; use .dev.vars locally and Wrangler secrets later.
   "vars": {
     "LUMA_ENVIRONMENT": "local",
-    "LUMA_PHASE": "00-foundation",
+    "LUMA_PHASE": "01-data-and-core",
     "TELEGRAM_GROUP_ID": "",
     "TELEGRAM_ADMIN_USER_IDS": "",
     "NEBULA_BASE_URL": "",

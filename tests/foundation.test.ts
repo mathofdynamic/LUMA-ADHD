@@ -8,7 +8,7 @@ import {
 
 const environment = {
   LUMA_ENVIRONMENT: "local",
-  LUMA_PHASE: "00-foundation",
+  LUMA_PHASE: "01-data-and-core",
 } satisfies Pick<Env, "LUMA_ENVIRONMENT" | "LUMA_PHASE">;
 
 describe("foundation API", () => {
@@ -31,7 +31,7 @@ describe("foundation API", () => {
     await expect(response.json()).resolves.toEqual({
       name: "luma-adhd",
       version: "0.1.0",
-      phase: "00-foundation",
+      phase: "01-data-and-core",
     });
   });
 

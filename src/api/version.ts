@@ -8,6 +8,6 @@ export function versionResponse(request: Request): Response {
   return jsonResponse({
     name: "luma-adhd",
     version: "0.1.0",
-    phase: "00-foundation",
+    phase: "01-data-and-core",
   });
 }

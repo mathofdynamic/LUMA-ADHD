@@ -7,8 +7,8 @@
   "scripts": {
     "types": "wrangler types",
     "types:check": "wrangler types --check",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p admin/tsconfig.json --noEmit",
-    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p admin/tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts",
     "build:admin": "vite build --config admin/vite.config.ts",
     "build:worker": "wrangler deploy --dry-run",
     "build": "npm run build:admin && npm run build:worker",
@@ -23,6 +23,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.21.3",
     "@cloudflare/workers-types": "^5.20260814.1",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",

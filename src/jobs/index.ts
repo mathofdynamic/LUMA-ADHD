@@ -21,7 +21,7 @@ export function isAgentJobMessage(value: unknown): value is AgentJobMessage {
   );
 }
 
-/** Phase 00 reserves the Queue contract without executing agent work. */
+/** Phase 01 keeps the Queue contract coarse without executing agent work. */
 export function consumeAgentJobs(
   batch: MessageBatch<AgentJobMessage>,
 ): void {
