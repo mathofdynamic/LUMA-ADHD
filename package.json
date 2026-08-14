@@ -1,0 +1,36 @@
+{
+  "name": "luma-adhd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare-native foundation for the LUMA ADHD multi-agent workspace.",
+  "scripts": {
+    "types": "wrangler types",
+    "types:check": "wrangler types --check",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p admin/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build:admin": "vite build --config admin/vite.config.ts",
+    "build:worker": "wrangler deploy --dry-run",
+    "build": "npm run build:admin && npm run build:worker",
+    "dev": "npm run build:admin && wrangler dev --local",
+    "dev:admin": "vite --config admin/vite.config.ts",
+    "dev:worker": "wrangler dev --local",
+    "migrations:local": "wrangler d1 migrations apply luma-adhd --local",
+    "check:startup": "wrangler check startup"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260814.1",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.123.0"
+  }
+}

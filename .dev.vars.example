@@ -1,0 +1,33 @@
+# LUMA ADHD local configuration contract.
+# This file contains names only. Keep all values empty until a later phase.
+# Copy to .dev.vars for local work; .dev.vars is git-ignored.
+
+# Safe or operational identifiers (not authentication secrets).
+LUMA_ENVIRONMENT=local
+CLOUDFLARE_ACCOUNT_ID=
+TELEGRAM_GROUP_ID=
+TELEGRAM_ADMIN_USER_IDS=
+
+# Telegram secrets. Required only when Phase 02 enables Telegram integration.
+TELEGRAM_WEBHOOK_SECRET=
+TELEGRAM_GATEWAY_BOT_TOKEN=
+TELEGRAM_PRODUCT_BOT_TOKEN=
+TELEGRAM_GROWTH_BOT_TOKEN=
+TELEGRAM_CREATIVE_BOT_TOKEN=
+TELEGRAM_TECH_BOT_TOKEN=
+TELEGRAM_FINANCE_BOT_TOKEN=
+TELEGRAM_CUSTOMER_BOT_TOKEN=
+TELEGRAM_OPERATIONS_BOT_TOKEN=
+TELEGRAM_HERETIC_BOT_TOKEN=
+
+# Provider configuration. URLs and model names are identifiers; API keys are secrets.
+NEBULA_API_KEY=
+NEBULA_BASE_URL=
+NEBULA_MODEL=
+
+GOD_API_KEY=
+GOD_BASE_URL=
+GOD_MODEL=
+
+# Admin authentication secret. Required only when production admin auth is implemented.
+ADMIN_AUTH_SECRET=

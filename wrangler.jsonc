@@ -1,0 +1,70 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "luma-adhd",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-08-14",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  },
+
+  // These are non-secret identifiers and phase defaults. Runtime secrets are
+  // intentionally absent; use .dev.vars locally and Wrangler secrets later.
+  "vars": {
+    "LUMA_ENVIRONMENT": "local",
+    "LUMA_PHASE": "00-foundation",
+    "TELEGRAM_GROUP_ID": "",
+    "TELEGRAM_ADMIN_USER_IDS": "",
+    "NEBULA_BASE_URL": "",
+    "NEBULA_MODEL": "",
+    "GOD_BASE_URL": "",
+    "GOD_MODEL": ""
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "luma-adhd",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "./migrations"
+    }
+  ],
+
+  "queues": {
+    "producers": [
+      {
+        "binding": "AGENT_JOBS",
+        "queue": "luma-adhd-agent-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "luma-adhd-agent-jobs",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3
+      }
+    ]
+  },
+
+  // One light metronome is reserved for later bounded scheduling work.
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+
+  // The React/Vite build is served as Worker Static Assets. API routes run
+  // first; navigation requests fall back to the SPA index.html asset.
+  "assets": {
+    "directory": "./admin/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  }
+
+  // Reserved future secret names (never add them to vars):
+  // TELEGRAM_WEBHOOK_SECRET, TELEGRAM_*_BOT_TOKEN, NEBULA_API_KEY,
+  // GOD_API_KEY, ADMIN_AUTH_SECRET.
+  // Optional Browser Rendering is intentionally not bound in Phase 00.
+}
