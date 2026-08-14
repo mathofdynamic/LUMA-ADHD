@@ -13,7 +13,7 @@ function logScheduleTick(controller: ScheduledController): void {
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "00-foundation",
+      phase: "01-data-and-core",
     }),
   );
 }

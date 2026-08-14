@@ -11,6 +11,6 @@
     "forceConsistentCasingInFileNames": true,
     "lib": ["ES2022"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "worker-configuration.d.ts"],
-  "exclude": ["node_modules", "admin"]
+  "include": ["src/**/*.ts", "worker-configuration.d.ts"],
+  "exclude": ["node_modules", "admin", "tests"]
 }

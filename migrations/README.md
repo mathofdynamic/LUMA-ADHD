@@ -1,6 +1,6 @@
 # D1 migrations
 
-Phase 00 creates only the foundation metadata table. Phase 01 owns the domain schema for agents, messages, threads, files, and jobs.
+Phase 00 creates only the foundation metadata table. Phase 01 adds the durable domain schema for agents, messages, threads, files, jobs, evaluations, and governance records.
 
 Apply locally with:
 
