@@ -1,0 +1,18 @@
+node_modules/
+admin/dist/
+.wrangler/
+coverage/
+
+# Local runtime configuration. Keep the documented example tracked.
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Other local environment files.
+.env
+.env.*
+!.env.example
+
+*.log
+*.cpuprofile
+.DS_Store
