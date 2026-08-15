@@ -53,7 +53,9 @@ export class KnowledgeSyncService {
   private readonly timeoutMs: number;
 
   constructor(private readonly repositories: Repositories, options: KnowledgeSyncServiceOptions = {}) {
-    this.fetcher = options.fetcher ?? fetch;
+    // Cloudflare's global fetch is a receiver-bound platform function. Keep
+    // injected fakes testable while preserving the Worker receiver in live use.
+    this.fetcher = (options.fetcher ?? fetch).bind(globalThis);
     this.now = options.now ?? nowIso;
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }
