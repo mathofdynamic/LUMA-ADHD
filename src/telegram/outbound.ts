@@ -107,7 +107,8 @@ export class TelegramOutboundService {
     });
     await this.dependencies.repositories.threads.touchActivity(input.threadId, this.now());
 
-    const renderedParts = renderTelegramText(input.contentText);
+    const contentFormat = input.contentFormat ?? "plain_text";
+    const renderedParts = renderTelegramText(input.contentText, contentFormat);
     const outbound = await this.dependencies.repositories.telegramOutbound.create({
       messageId: message.id,
       threadId: input.threadId,
@@ -118,6 +119,7 @@ export class TelegramOutboundService {
       payload: {
         source: "telegram_projection",
         parseMode: "HTML",
+        contentFormat,
         partCount: renderedParts.length,
         idempotencyKey: input.idempotencyKey,
       },

@@ -75,9 +75,6 @@ function repairInvalidUnicodeEscapes(text: string): string {
       continue;
     }
 
-    // Nebula occasionally emits a literal invalid \u sequence inside a
-    // string. Preserve the visible text as a literal backslash and let the
-    // normal schema validator decide whether the action is otherwise valid.
     repaired += "\\\\";
   }
 
@@ -85,9 +82,7 @@ function repairInvalidUnicodeEscapes(text: string): string {
 }
 
 function readNullableString(value: unknown, field: string, problems: string[]): string | null {
-  if (value === undefined || value === null) {
-    return null;
-  }
+  if (value === undefined || value === null) return null;
   if (typeof value !== "string" || value.trim().length === 0) {
     problems.push(`${field} must be a non-empty string or null`);
     return null;
@@ -102,9 +97,7 @@ function parseJsonText(text: string): unknown {
   try {
     return JSON.parse(source) as unknown;
   } catch (error: unknown) {
-    if (!/unicode escape/iu.test(String(error))) {
-      throw error;
-    }
+    if (!/unicode escape/iu.test(String(error))) throw error;
     return JSON.parse(repairInvalidUnicodeEscapes(source)) as unknown;
   }
 }
@@ -138,7 +131,7 @@ export function validateAgentAction(value: unknown): AgentAction {
       problems.push("content must be a string or null");
     } else {
       content = value.content;
-      const maxContentCharacters = Math.min(400, FOUNDATION_GUARDRAILS.maxAgentActionContentCharacters);
+      const maxContentCharacters = Math.min(4_096, FOUNDATION_GUARDRAILS.maxAgentActionContentCharacters);
       if (Array.from(content).length > maxContentCharacters) {
         problems.push(`content must not exceed ${maxContentCharacters} characters`);
       }
@@ -148,9 +141,7 @@ export function validateAgentAction(value: unknown): AgentAction {
   const targetAgentId = readNullableString(value.target_agent_id, "target_agent_id", problems);
   const targetThreadId = readNullableString(value.target_thread_id, "target_thread_id", problems);
   const metadata = value.metadata === undefined ? {} : value.metadata;
-  if (!isJsonObject(metadata)) {
-    problems.push("metadata must be a JSON object");
-  }
+  if (!isJsonObject(metadata)) problems.push("metadata must be a JSON object");
 
   if (intent === "SPEAK" && (content === null || content.trim().length === 0)) {
     problems.push("SPEAK requires non-empty content");
@@ -162,9 +153,7 @@ export function validateAgentAction(value: unknown): AgentAction {
     problems.push(`target_agent_id must be null for ${intent}`);
   }
 
-  if (problems.length > 0) {
-    throw new AgentActionValidationError(problems);
-  }
+  if (problems.length > 0) throw new AgentActionValidationError(problems);
 
   return {
     intent: intent as AgentIntent,
@@ -195,7 +184,7 @@ export const AGENT_ACTION_SCHEMA = `{
     "intent": {"type": "string", "enum": ["SPEAK", "WAIT", "REQUEST_AGENT", "REQUEST_HUMAN", "PROPOSE_THREAD", "REOPEN_THREAD", "FILE_WORK", "DRAW", "VOTE"]},
     "content": {"type": ["string", "null"], "description": "Required for SPEAK and PROPOSE_THREAD; absent or null for WAIT."},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-    "reason_summary": {"type": "string", "maxLength": 500},
+    "reason_summary": {"type": "string", "maxLength": 160},
     "target_agent_id": {"type": ["string", "null"]},
     "target_thread_id": {"type": ["string", "null"]},
     "metadata": {"type": "object"}
@@ -205,9 +194,9 @@ export const AGENT_ACTION_SCHEMA = `{
 export function actionExample(): string {
   return JSON.stringify({
     intent: "SPEAK",
-    content: "یک پیشنهاد کوتاه و قابل آزمون.",
+    content: "<b>پیشنهاد من:</b>\n• یک تست کوچک با کاربران جدید\n• اندازه‌گیری نرخ فعال‌سازی (<code>Activation Rate</code>)",
     confidence: 0.72,
-    reason_summary: "این پاسخ یک گام تصمیم‌پذیر اضافه می‌کند.",
+    reason_summary: "یک گام قابل‌آزمون برای تصمیم‌گیری اضافه می‌کند.",
     target_agent_id: null,
     target_thread_id: null,
     metadata: {},

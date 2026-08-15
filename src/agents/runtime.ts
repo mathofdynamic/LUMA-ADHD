@@ -16,7 +16,7 @@ import {
   parseAgentAction,
   type AgentAction,
 } from "./actions";
-import { buildAgentPrompt } from "./prompts";
+import { buildAgentPrompt, TELEGRAM_PRESENTATION_GUIDANCE } from "./prompts";
 import {
   scoreCandidates,
   type AgentCandidateProfile,
@@ -448,7 +448,7 @@ export class AgentRuntimeService {
           inputMessageId: input.inputMessageId,
           wakeReason: input.wakeReason,
           idempotencyKey,
-          metadata: { mode: input.mode, promptVersion: "phase-03-v1" },
+          metadata: { mode: input.mode, promptVersion: "phase-03-v2-telegram-html" },
         });
       } catch (error: unknown) {
         if (!(error instanceof NotFoundError) || attempt === 3) throw error;
@@ -464,6 +464,9 @@ export class AgentRuntimeService {
     await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "running");
     const specialties = await this.dependencies.repositories.agents.listSpecialties(agent.id);
     const interests = await this.dependencies.repositories.agents.listInterests(agent.id);
+    const human = context.wakeMessage?.authorUserId
+      ? await this.dependencies.repositories.users.getById(context.wakeMessage.authorUserId).catch(() => null)
+      : null;
     const prompt = buildAgentPrompt({
       agent,
       specialties,
@@ -473,6 +476,15 @@ export class AgentRuntimeService {
       recentMessages: context.recentMessages,
       addressedAgentId: context.addressedAgentId,
       requestedAgentIds: context.requestedAgentIds,
+      participants: [
+        ...context.profiles.map((profile) => ({
+          id: profile.agent.id,
+          displayName: profile.agent.displayName,
+          kind: "agent" as const,
+        })),
+        ...(human ? [{ id: human.id, displayName: human.displayName, kind: "human" as const }] : []),
+      ],
+      humanDisplayName: human?.displayName,
       reputationContext: { globalRank: agent.rank },
     });
 
@@ -536,13 +548,16 @@ export class AgentRuntimeService {
             `agent_id: ${agent.id}`,
             `agent_name: ${agent.displayName}`,
             `agent_specialty: ${agent.specialty}`,
+            `human_display_name: ${human?.displayName ?? "none"}`,
             `thread_objective: ${thread.summary ?? thread.title}`,
             `wake_reason: ${context.wakeReason}`,
             `addressed_agent_id: ${context.addressedAgentId ?? "none"}`,
+            `known_participants: ${context.profiles.map((profile) => `${profile.agent.id}=${profile.agent.displayName}`).join(", ") || "none"}`,
             `recent_context:\n${recentContext || "none"}`,
+            TELEGRAM_PRESENTATION_GUIDANCE,
             AGENT_ACTION_SCHEMA,
             "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
-            "Keep content under 400 Unicode characters and reason_summary under 160 characters. Use null targets unless the intent requires one.",
+            "Keep content under 4096 Unicode characters and reason_summary under 160 characters. Use null targets unless the intent requires one.",
             "Do not add prose, Markdown fences, or hidden reasoning. Reply in the language of recent_context.",
           ].join("\n"),
           messages: [{
@@ -712,6 +727,7 @@ export class AgentRuntimeService {
               chatId: context.thread.chatId,
               agentId: context.agent.id,
               contentText: content,
+              contentFormat: "telegram_html",
               idempotencyKey: projectionKey,
               replyToMessageId: context.replyToMessageId,
               metadata: { runtimeTurnId: context.turn.id },

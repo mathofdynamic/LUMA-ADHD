@@ -82,6 +82,8 @@ export interface TelegramSendTextInput {
   readonly replyToTelegramMessageId?: string;
 }
 
+export type TelegramContentFormat = "plain_text" | "telegram_html";
+
 export interface TelegramSentMessage {
   readonly telegramMessageId: string;
   readonly telegramChatId: string;
@@ -129,6 +131,7 @@ export interface TelegramAgentProjectionInput {
   readonly chatId: string;
   readonly agentId: string;
   readonly contentText: string;
+  readonly contentFormat?: TelegramContentFormat;
   readonly idempotencyKey: string;
   readonly replyToMessageId?: string;
   readonly metadata?: JsonObject;

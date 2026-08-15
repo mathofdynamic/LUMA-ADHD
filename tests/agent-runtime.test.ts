@@ -5,6 +5,7 @@ import {
   AgentActionValidationError,
   AgentRuntimeService,
   AgentScheduler,
+  buildAgentPrompt,
   parseAgentAction,
   scoreCandidates,
 } from "../src/agents";
@@ -301,9 +302,37 @@ describe("Phase 03 action contract and provider boundary", () => {
 });
 
 describe("Phase 03 bounded orchestration", () => {
+  it("builds participant-aware Telegram guidance without making formatting personality-bound", async () => {
+    const context = await fixture("یک سؤال فارسی درباره بهبود مسیر کاربر", { addressedAgentId: "agent-product" });
+    const agent = await repositories.agents.getById("agent-product");
+    const thread = await repositories.threads.getById(context.threadId);
+    const message = await repositories.messages.getById(context.messageId);
+    const human = await repositories.users.getById(message.authorUserId as string);
+    const prompt = buildAgentPrompt({
+      agent,
+      specialties: await repositories.agents.listSpecialties(agent.id),
+      interests: await repositories.agents.listInterests(agent.id),
+      thread,
+      wakeReason: "human_reply_to_agent",
+      recentMessages: [message],
+      addressedAgentId: agent.id,
+      participants: [
+        { id: agent.id, displayName: agent.displayName, kind: "agent" },
+        { id: human.id, displayName: human.displayName, kind: "human" },
+      ],
+      humanDisplayName: human.displayName,
+    });
+
+    expect(prompt.systemPrompt).toContain("known_participants");
+    expect(prompt.systemPrompt).toContain(agent.displayName);
+    expect(prompt.systemPrompt).toContain("Telegram presentation");
+    expect(prompt.systemPrompt).toContain("Never emit Markdown markers");
+    expect(prompt.systemPrompt).toContain("Do not restate the whole replied-to message");
+  });
+
   it("prioritizes an addressed agent, projects SPEAK once, hides WAIT, and prevents domination", async () => {
     const provider = new FakeProvider();
-    provider.enqueueJson(action("SPEAK", { content: "Radin should start with a small user test." }));
+    provider.enqueueJson(action("SPEAK", { content: "<b>رادین</b>، از یک تست کوچک با کاربر جدید شروع کنیم." }));
     provider.enqueueJson(action("WAIT"));
     provider.enqueueJson(action("WAIT"));
     const transport = new FakeTelegramTransport();
@@ -320,6 +349,7 @@ describe("Phase 03 bounded orchestration", () => {
     expect(result.publicMessages).toBe(1);
     expect(result.waits).toBe(2);
     expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]?.text).toContain("<b>رادین</b>");
     const turns = await repositories.agentTurns.listByJob(context.job.id);
     expect(turns[0]?.agentId).toBe("agent-product");
     expect(turns[1]?.outputMessageId).toBeNull();
