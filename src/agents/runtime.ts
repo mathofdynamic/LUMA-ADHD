@@ -478,8 +478,8 @@ export class AgentRuntimeService {
         modelKey: this.dependencies.modelKey,
         systemPrompt: prompt.systemPrompt,
         messages: prompt.messages,
-        temperature: 0.2,
-        maxOutputTokens: 384,
+        temperature: 0,
+        maxOutputTokens: 512,
         timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
         metadata: { agentId: agent.id, threadId: thread.id },
       });
@@ -520,22 +520,26 @@ export class AgentRuntimeService {
         const repaired = await this.dependencies.provider.generate({
           modelKey: this.dependencies.modelKey,
           systemPrompt: [
+            prompt.systemPrompt,
             "Return exactly one complete JSON object matching this LUMA action schema.",
             AGENT_ACTION_SCHEMA,
             "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
             "Keep content under 400 Unicode characters and reason_summary under 160 characters.",
             "Do not add prose, Markdown fences, or hidden reasoning.",
           ].join("\n"),
-          messages: [{
-            role: "user",
-            content: JSON.stringify({
-              invalid_response: response.text.slice(0, 20_000),
-              validation_errors: error.problems,
-              required_schema: "Use the action schema from the prior prompt and return exactly one action object.",
-            }),
-          }],
+          messages: [
+            ...prompt.messages,
+            {
+              role: "user",
+              content: JSON.stringify({
+                invalid_response: response.text.slice(0, 20_000),
+                validation_errors: error.problems,
+                required_schema: AGENT_ACTION_SCHEMA,
+              }),
+            },
+          ],
           temperature: 0,
-          maxOutputTokens: 384,
+          maxOutputTokens: 512,
           timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
           metadata: { repair: "true", agentId: agent.id, threadId: thread.id },
         });

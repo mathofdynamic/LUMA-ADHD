@@ -175,6 +175,7 @@ describe("Phase 03 action contract and provider boundary", () => {
     expect(result.publicMessages).toBe(1);
     expect(provider.calls).toHaveLength(4);
     expect(provider.calls.some((request) => request.systemPrompt.includes('"required"'))).toBe(true);
+    expect(provider.calls.some((request) => request.systemPrompt.includes("thread_objective"))).toBe(true);
     const turns = await repositories.agentTurns.listByJob(context.job.id);
     expect(turns[0]?.metadata.repairAttempts).toBe(1);
     const usage = await env.DB
