@@ -43,6 +43,14 @@ function Invoke-Smoke([string]$Path, [hashtable]$Body = @{}) {
   return $parsed
 }
 
+function Show-WorkerFailure($StdoutTask, $StderrTask) {
+  $lines = @()
+  if ($null -ne $StdoutTask -and $StdoutTask.IsCompleted) { $lines += ($StdoutTask.GetAwaiter().GetResult() -split "`r?`n") }
+  if ($null -ne $StderrTask -and $StderrTask.IsCompleted) { $lines += ($StderrTask.GetAwaiter().GetResult() -split "`r?`n") }
+  $useful = @($lines | Where-Object { $_ -match '(ERROR|Error|failed|Failed|Invalid|invalid|not found|Cannot|cannot|✘|X\s)' } | Select-Object -Last 20)
+  if ($useful.Count -gt 0) { $useful | Write-Output }
+}
+
 try {
   Add-Type -AssemblyName System.Net.Http
   $http = [System.Net.Http.HttpClient]::new()
@@ -97,7 +105,10 @@ try {
 
   $ready = $false
   for ($attempt = 0; $attempt -lt 120; $attempt += 1) {
-    if ($workerProcess.HasExited) { throw 'Phase 04 smoke Worker exited before readiness' }
+    if ($workerProcess.HasExited) {
+      Show-WorkerFailure $stdoutTask $stderrTask
+      throw 'Phase 04 smoke Worker exited before readiness'
+    }
     try {
       $readyResponse = Invoke-WebRequest -UseBasicParsing ('http://127.0.0.1:' + $port + '/__luma_phase04/ready') -TimeoutSec 2
       if ($readyResponse.StatusCode -eq 200) { $ready = $true; break }
