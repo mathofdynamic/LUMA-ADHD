@@ -8,6 +8,7 @@ import type { ContextPack, ContextPackItem, MemoryActor, MemoryItemType } from "
 const MAX_QUERY_TERMS = 12;
 const MAX_TERM_LENGTH = 80;
 const MAX_EXCERPT_LENGTH = 700;
+const FTS_OPERATORS = new Set(["AND", "NOT", "NEAR", "OR"]);
 
 export interface RetrievalSearchOptions {
   readonly agentId?: string;
@@ -24,7 +25,11 @@ export function normalizeFtsQuery(query: string): readonly string[] {
   if (typeof query !== "string") return [];
   const normalized = query.normalize("NFC").slice(0, 1_000);
   const terms = normalized.match(/[\p{L}\p{N}_]+/gu) ?? [];
-  return [...new Set(terms.map((term) => term.slice(0, MAX_TERM_LENGTH)).filter(Boolean))].slice(0, MAX_QUERY_TERMS);
+  return [...new Set(
+    terms
+      .map((term) => term.slice(0, MAX_TERM_LENGTH))
+      .filter((term) => Boolean(term) && !FTS_OPERATORS.has(term.toUpperCase())),
+  )].slice(0, MAX_QUERY_TERMS);
 }
 
 function ftsExpression(terms: readonly string[]): string {
