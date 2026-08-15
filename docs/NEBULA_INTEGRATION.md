@@ -26,7 +26,7 @@ The Phase 03 adapter sends a non-streaming OpenAI-compatible chat request:
     {"role": "system", "content": "..."},
     {"role": "user", "content": "..."}
   ],
-  "temperature": 0.2,
+  "temperature": 0,
   "max_tokens": 512,
   "stream": false
 }
@@ -38,11 +38,12 @@ The guide documents a response containing `model`, `choices[0].message.content`,
 the routed provider header when present, without persisting raw response headers.
 
 The model must be `auto` or an exact ID returned by `/v1/models`. The current
-catalog was queried during Phase 03 setup. Normal agents use
-`@cf/meta/llama-3.1-8b-instruct-fast` because it is an explicitly catalogued
-small, fast model with a large documented context window. Provider-native tools
-are intentionally not required by LUMA; structured action JSON is validated by
-the application.
+catalog was queried during Phase 03 validation. Normal agents use `auto` because
+the previously selected fixed fast model became intermittently ineligible and
+returned 422/partial structured responses during live validation. `auto` lets the
+Nebula gateway select an eligible route while the application still validates the
+complete action contract locally. Provider-native tools are intentionally not
+required by LUMA; structured action JSON is validated by the application.
 
 ## Structured output
 

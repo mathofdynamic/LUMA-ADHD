@@ -151,7 +151,7 @@ try {
     'TELEGRAM_WEBHOOK_SECRET=local-smoke-secret',
     ('NEBULA_API_KEY=' + $nebulaKey),
     'NEBULA_BASE_URL=https://nebula-free-llm.nebula-ai-company.workers.dev/v1',
-    'NEBULA_MODEL=@cf/meta/llama-3.1-8b-instruct-fast',
+    'NEBULA_MODEL=auto',
     ('SMOKE_SECRET=' + $smokeSecret)
   )
   foreach ($alias in $mapping.Keys) {

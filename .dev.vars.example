@@ -28,7 +28,7 @@ TELEGRAM_GOD_BOT_TOKEN=
 # local FakeProvider tests.
 NEBULA_API_KEY=
 NEBULA_BASE_URL=https://nebula-free-llm.nebula-ai-company.workers.dev/v1
-NEBULA_MODEL=@cf/meta/llama-3.1-8b-instruct-fast
+NEBULA_MODEL=auto
 
 GOD_API_KEY=
 GOD_BASE_URL=

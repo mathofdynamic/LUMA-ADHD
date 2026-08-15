@@ -7,7 +7,7 @@ import type {
 } from "./types";
 
 export const VERIFIED_NEBULA_BASE_URL = "https://nebula-free-llm.nebula-ai-company.workers.dev/v1";
-export const DEFAULT_NEBULA_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
+export const DEFAULT_NEBULA_MODEL = "auto";
 
 interface NebulaResponse {
   readonly id?: unknown;
