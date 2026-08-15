@@ -6,7 +6,7 @@ export type ApiEnvironment = Pick<Env, "LUMA_ENVIRONMENT" | "LUMA_PHASE">;
 
 export function routeApi(
   request: Request,
-  _env: ApiEnvironment,
+  env: ApiEnvironment,
 ): Response {
   const pathname = new URL(request.url).pathname;
 
@@ -14,7 +14,7 @@ export function routeApi(
     case "/api/health":
       return healthResponse(request);
     case "/api/version":
-      return versionResponse(request);
+      return versionResponse(request, env);
     default:
       return jsonResponse({ error: "not_found" }, 404);
   }
