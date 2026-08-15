@@ -253,6 +253,32 @@ describe("Phase 02 Telegram outbound projection", () => {
     });
   });
 
+  it("binds the Worker fetch receiver before invoking Telegram HTTP", async () => {
+    let receiver: unknown;
+    const config = parseTelegramConfig({
+      TELEGRAM_GROUP_ID: groupId,
+      TELEGRAM_WEBHOOK_SECRET: "test-secret",
+      TELEGRAM_BOT_IDENTITIES_JSON: JSON.stringify({ product: { username: "luma_product" } }),
+      TELEGRAM_PRODUCT_BOT_TOKEN: "placeholder-token",
+    });
+    const receiverSensitiveFetch = function (this: unknown): Promise<Response> {
+      receiver = this;
+      return Promise.resolve(new Response(JSON.stringify({
+        ok: true,
+        result: { message_id: 60_002, chat: { id: groupId } },
+      }), { status: 200 }));
+    } as typeof fetch;
+
+    const transport = new TelegramBotApiTransport(config, receiverSensitiveFetch);
+    await transport.sendTextMessage({
+      botAlias: "product",
+      telegramChatId: groupId,
+      text: "receiver-safe",
+    });
+
+    expect(receiver).toBe(globalThis);
+  });
+
   it("selects the persona, records one outbound mapping, and is idempotent", async () => {
     const transport = new FakeTelegramTransport();
     const app = application(transport);

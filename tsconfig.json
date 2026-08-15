@@ -11,6 +11,6 @@
     "forceConsistentCasingInFileNames": true,
     "lib": ["ES2022"]
   },
-  "include": ["src/**/*.ts", "worker-configuration.d.ts"],
+  "include": ["src/**/*.ts", "scripts/telegram-smoke-worker.ts", "worker-configuration.d.ts"],
   "exclude": ["node_modules", "admin", "tests"]
 }

@@ -60,7 +60,9 @@ export class TelegramBotApiTransport implements TelegramTransport {
     private readonly config: TelegramConfig,
     fetcher: typeof fetch = fetch,
   ) {
-    this.fetcher = fetcher;
+    // Cloudflare's global fetch requires its global receiver. Calling it as
+    // a class property otherwise produces an Illegal invocation error.
+    this.fetcher = fetcher.bind(globalThis);
   }
 
   async sendTextMessage(input: TelegramSendTextInput): Promise<TelegramSentMessage> {

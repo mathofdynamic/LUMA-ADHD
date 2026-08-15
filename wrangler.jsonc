@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "luma-adhd",
+  "account_id": "e691d5bc257b6135be4353568c1f7410",
   "main": "./src/index.ts",
   "compatibility_date": "2026-08-14",
   "compatibility_flags": ["nodejs_compat"],
@@ -28,7 +29,7 @@
     {
       "binding": "DB",
       "database_name": "luma-adhd",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "0098077a-4f95-4a05-8225-72edfa2f1e05",
       "migrations_dir": "./migrations"
     }
   ],

@@ -83,7 +83,7 @@ export async function handleTelegramWebhook(
     config = parseTelegramConfig(env);
   } catch (error: unknown) {
     if (error instanceof TelegramConfigurationError) {
-      return jsonResponse({ ok: false, error: "telegram_not_configured" }, 503);
+      return jsonResponse({ ok: false, error: "telegram_configuration_invalid" }, 503);
     }
     throw error;
   }
