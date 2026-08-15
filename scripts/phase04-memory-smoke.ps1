@@ -47,8 +47,12 @@ function Show-WorkerFailure($StdoutTask, $StderrTask) {
   $lines = @()
   if ($null -ne $StdoutTask -and $StdoutTask.IsCompleted) { $lines += ($StdoutTask.GetAwaiter().GetResult() -split "`r?`n") }
   if ($null -ne $StderrTask -and $StderrTask.IsCompleted) { $lines += ($StderrTask.GetAwaiter().GetResult() -split "`r?`n") }
-  $useful = @($lines | Where-Object { $_ -match '(ERROR|Error|failed|Failed|Invalid|invalid|not found|Cannot|cannot|✘|X\s)' } | Select-Object -Last 20)
-  if ($useful.Count -gt 0) { $useful | Write-Output }
+  $useful = @($lines | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Last 40)
+  foreach ($line in $useful) {
+    $safe = [string]$line
+    if ($safe.Length -gt 500) { $safe = $safe.Substring(0, 500) }
+    Write-Output ('SMOKE_WORKER_LOG=' + $safe)
+  }
 }
 
 try {
