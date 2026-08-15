@@ -517,29 +517,37 @@ export class AgentRuntimeService {
       repairAttempts = 1;
       const repairStartedAt = Date.now();
       try {
+        const recentContext = context.recentMessages
+          .slice(-4)
+          .map((message) => `${message.authorType}:${message.contentText}`)
+          .join("\n")
+          .slice(0, 3_000);
         const repaired = await this.dependencies.provider.generate({
           modelKey: this.dependencies.modelKey,
           systemPrompt: [
-            prompt.systemPrompt,
-            "Return exactly one complete JSON object matching this LUMA action schema.",
+            "You are repairing one LUMA ADHD agent action. Return only one complete JSON object.",
+            `agent_id: ${agent.id}`,
+            `agent_name: ${agent.displayName}`,
+            `agent_specialty: ${agent.specialty}`,
+            `thread_objective: ${thread.summary ?? thread.title}`,
+            `wake_reason: ${context.wakeReason}`,
+            `addressed_agent_id: ${context.addressedAgentId ?? "none"}`,
+            `recent_context:\n${recentContext || "none"}`,
             AGENT_ACTION_SCHEMA,
             "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
-            "Keep content under 400 Unicode characters and reason_summary under 160 characters.",
-            "Do not add prose, Markdown fences, or hidden reasoning.",
+            "Keep content under 400 Unicode characters and reason_summary under 160 characters. Use null targets unless the intent requires one.",
+            "Do not add prose, Markdown fences, or hidden reasoning. Reply in the language of recent_context.",
           ].join("\n"),
-          messages: [
-            ...prompt.messages,
-            {
-              role: "user",
-              content: JSON.stringify({
-                invalid_response: response.text.slice(0, 20_000),
-                validation_errors: error.problems,
-                required_schema: AGENT_ACTION_SCHEMA,
-              }),
-            },
-          ],
+          messages: [{
+            role: "user",
+            content: JSON.stringify({
+              invalid_response: response.text.slice(0, 4_000),
+              validation_errors: error.problems,
+              instruction: "Return the corrected action now.",
+            }),
+          }],
           temperature: 0,
-          maxOutputTokens: 512,
+          maxOutputTokens: 256,
           timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
           metadata: { repair: "true", agentId: agent.id, threadId: thread.id },
         });

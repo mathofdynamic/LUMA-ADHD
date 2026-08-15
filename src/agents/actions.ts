@@ -128,8 +128,8 @@ export function validateAgentAction(value: unknown): AgentAction {
   const reasonSummary = value.reason_summary;
   if (typeof reasonSummary !== "string" || reasonSummary.trim().length === 0) {
     problems.push("reason_summary must be a non-empty string");
-  } else if (Array.from(reasonSummary).length > 500) {
-    problems.push("reason_summary must not exceed 500 characters");
+  } else if (Array.from(reasonSummary).length > 160) {
+    problems.push("reason_summary must not exceed 160 characters");
   }
 
   let content: string | null = null;
@@ -138,8 +138,9 @@ export function validateAgentAction(value: unknown): AgentAction {
       problems.push("content must be a string or null");
     } else {
       content = value.content;
-      if (Array.from(content).length > FOUNDATION_GUARDRAILS.maxAgentActionContentCharacters) {
-        problems.push(`content must not exceed ${FOUNDATION_GUARDRAILS.maxAgentActionContentCharacters} characters`);
+      const maxContentCharacters = Math.min(400, FOUNDATION_GUARDRAILS.maxAgentActionContentCharacters);
+      if (Array.from(content).length > maxContentCharacters) {
+        problems.push(`content must not exceed ${maxContentCharacters} characters`);
       }
     }
   }
@@ -156,6 +157,9 @@ export function validateAgentAction(value: unknown): AgentAction {
   }
   if (intent === "PROPOSE_THREAD" && (content === null || content.trim().length === 0)) {
     problems.push("PROPOSE_THREAD requires non-empty content");
+  }
+  if ((intent === "SPEAK" || intent === "WAIT") && targetAgentId !== null) {
+    problems.push(`target_agent_id must be null for ${intent}`);
   }
 
   if (problems.length > 0) {
