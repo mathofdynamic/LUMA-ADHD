@@ -2,7 +2,7 @@
 param(
   [ValidateSet('all', 'sync', 'documents', 'search', 'context')]
   [string]$Mode = 'all',
-  [string]$Query = 'لوما pricing growth'
+  [string]$Query = 'luma pricing growth'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -131,9 +131,17 @@ try {
     Write-Output ('DOCUMENT_SMOKE=' + ($documents.result | ConvertTo-Json -Compress -Depth 8))
   }
   if ($Mode -eq 'all' -or $Mode -eq 'search') {
-    foreach ($query in @('لوما', 'ورک‌فلو', 'قیمت', 'اشتراک', 'قوانین', 'growth', 'international', "' ) OR *")) {
+    $persianQueries = @(
+      (-join ([char[]](0x0644, 0x0648, 0x0645, 0x0627))),
+      (-join ([char[]](0x0648, 0x0631, 0x06A9, 0x200C, 0x0641, 0x0644, 0x0648))),
+      (-join ([char[]](0x0642, 0x06CC, 0x0645, 0x062A))),
+      (-join ([char[]](0x0627, 0x0634, 0x062A, 0x0631, 0x0627, 0x06A9))),
+      (-join ([char[]](0x0642, 0x0648, 0x0627, 0x0646, 0x06CC, 0x0646)))
+    )
+    foreach ($query in @($persianQueries + @('growth', 'international', "' ) OR *"))) {
       $search = Invoke-Smoke '/__luma_phase04/search' @{ query = $query; agentId = 'agent-product' }
-      Write-Output ('SEARCH=' + $query + ':count=' + @($search.results).Count + ':top=' + ([string]$search.results[0].title))
+      $topTitle = if (@($search.results).Count -gt 0) { [string]$search.results[0].title } else { 'none' }
+      Write-Output ('SEARCH=' + $query + ':count=' + @($search.results).Count + ':top=' + $topTitle)
     }
   }
   if ($Mode -eq 'all' -or $Mode -eq 'context') {
