@@ -236,6 +236,26 @@ export class ThreadRepository {
     return this.getById(threadId);
   }
 
+  async incrementTurnUsage(threadId: ThreadId, asOf = nowIso()): Promise<ThreadRecord> {
+    const result = await this.database
+      .prepare(
+        `UPDATE threads SET
+           turns_used = turns_used + 1,
+           phase_turns_used = phase_turns_used + 1,
+           updated_at = ?,
+           last_activity_at = ?
+         WHERE id = ? AND deleted_at IS NULL`,
+      )
+      .bind(asOf, asOf, threadId)
+      .run();
+
+    if (result.meta.changes !== 1) {
+      throw new NotFoundError("thread", threadId);
+    }
+
+    return this.getById(threadId);
+  }
+
   async addParticipant(
     threadId: ThreadId,
     participant: { readonly userId?: string; readonly agentId?: string; readonly role?: ThreadParticipantRole },

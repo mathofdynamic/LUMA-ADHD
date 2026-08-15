@@ -23,6 +23,14 @@ type TelegramSecretName =
 
 export type TelegramRuntimeEnv = {
   readonly DB: D1Database;
+  readonly AGENT_JOBS?: {
+    send(message: {
+      readonly kind: "agent.job";
+      readonly jobId: string;
+      readonly depth: number;
+      readonly createdAt: string;
+        }): Promise<unknown>;
+  };
   readonly TELEGRAM_GROUP_ID: string;
   readonly TELEGRAM_ADMIN_USER_IDS: string;
   readonly TELEGRAM_BOT_IDENTITIES_JSON: string;
@@ -123,6 +131,26 @@ export async function handleTelegramWebhook(
       receivedAt: new Date().toISOString(),
       payload,
     });
+
+    if (env.AGENT_JOBS && result.jobId && (result.status === "accepted" || result.status === "duplicate")) {
+      const job = await repositories.jobs.getById(result.jobId).catch(() => null);
+      if (job && (job.status === "pending" || job.status === "retry_scheduled") && job.lastEnqueuedAt === null) {
+        try {
+          await env.AGENT_JOBS.send({
+            kind: "agent.job",
+            jobId: job.id,
+            depth: job.chainDepth,
+            createdAt: new Date().toISOString(),
+          });
+          await repositories.jobs.markEnqueued(job.id);
+        } catch {
+          // The D1 job remains durable and the scheduled recovery path will
+          // enqueue it later. Do not turn a successful Telegram ingest into a
+          // duplicate Telegram delivery because Queue was briefly unavailable.
+          console.warn(JSON.stringify({ event: "agent_job_enqueue_deferred", jobId: job.id }));
+        }
+      }
+    }
 
     return jsonResponse({ ok: true, ...result });
   } catch (error: unknown) {

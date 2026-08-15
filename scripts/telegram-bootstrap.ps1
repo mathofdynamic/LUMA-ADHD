@@ -16,6 +16,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $tokenFile = Join-Path $repoRoot '.telegram-env'
+$configFile = Join-Path $repoRoot 'wrangler.jsonc'
+$wranglerPath = Join-Path $repoRoot 'node_modules\wrangler\bin\wrangler.js'
 
 if (-not (Test-Path -LiteralPath $tokenFile)) {
   throw 'Missing local .telegram-env'
@@ -139,14 +141,50 @@ Write-Output 'OWNER_AUTHORIZATION_RESOLVED=true'
 
 if ($Deploy) {
   $identityJson = $identities | ConvertTo-Json -Compress -Depth 4
-  $previousErrorAction = $ErrorActionPreference
-  $ErrorActionPreference = 'Continue'
-  $deployOutput = & npx.cmd --yes wrangler deploy --keep-vars --var 'LUMA_ENVIRONMENT:production' --var ("TELEGRAM_GROUP_ID:" + $GroupId) --var ("TELEGRAM_ADMIN_USER_IDS:" + $ownerId) --var ("TELEGRAM_BOT_IDENTITIES_JSON:" + $identityJson) 2>&1 | Out-String
-  $deployExitCode = $LASTEXITCODE
-  $ErrorActionPreference = $previousErrorAction
+  $escapedIdentityJson = $identityJson.Replace('\', '\\').Replace('"', '\"')
+  $runtimeConfigFile = Join-Path $repoRoot (
+    'phase03-live-' + [Guid]::NewGuid().ToString('N') + '.wrangler.jsonc'
+  )
+  try {
+    $runtimeConfig = Get-Content -Raw -LiteralPath $configFile
+    $runtimeConfig = $runtimeConfig.Replace(
+      '"LUMA_ENVIRONMENT": "local"',
+      '"LUMA_ENVIRONMENT": "production"'
+    )
+    $runtimeConfig = $runtimeConfig.Replace(
+      '"TELEGRAM_GROUP_ID": ""',
+      ('"TELEGRAM_GROUP_ID": "' + $GroupId + '"')
+    )
+    $runtimeConfig = $runtimeConfig.Replace(
+      '"TELEGRAM_ADMIN_USER_IDS": ""',
+      ('"TELEGRAM_ADMIN_USER_IDS": "' + $ownerId + '"')
+    )
+    $runtimeConfig = $runtimeConfig.Replace(
+      '"TELEGRAM_BOT_IDENTITIES_JSON": "{}"',
+      ('"TELEGRAM_BOT_IDENTITIES_JSON": "' + $escapedIdentityJson + '"')
+    )
+    if (
+      -not $runtimeConfig.Contains('"TELEGRAM_GROUP_ID": "' + $GroupId + '"') -or
+      -not $runtimeConfig.Contains('"TELEGRAM_ADMIN_USER_IDS": "' + $ownerId + '"') -or
+      -not $runtimeConfig.Contains('"TELEGRAM_BOT_IDENTITIES_JSON": "' + $escapedIdentityJson + '"')
+    ) {
+      throw 'Temporary runtime configuration could not be prepared'
+    }
+    [System.IO.File]::WriteAllText($runtimeConfigFile, $runtimeConfig)
 
-  if ($deployExitCode -ne 0) {
-    throw 'Worker deployment failed'
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $deployOutput = & node $wranglerPath deploy --config $runtimeConfigFile --keep-vars 2>&1 | Out-String
+    $deployExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorAction
+
+    if ($deployExitCode -ne 0) {
+      throw 'Worker deployment failed'
+    }
+  } finally {
+    if (Test-Path -LiteralPath $runtimeConfigFile) {
+      [System.IO.File]::Delete($runtimeConfigFile)
+    }
   }
 
   $baseUrl = [regex]::Match(

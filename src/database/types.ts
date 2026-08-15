@@ -147,6 +147,7 @@ export interface JobRecord {
   readonly attemptCount: number;
   readonly maxAttempts: number;
   readonly chainDepth: number;
+  readonly lastEnqueuedAt: string | null;
   readonly leaseOwner: string | null;
   readonly leaseExpiresAt: string | null;
   readonly lastError: string | null;
@@ -311,6 +312,7 @@ export interface CreateJobInput {
 
 export interface CreateHumanTaskInput {
   readonly id?: string;
+  readonly idempotencyKey?: string;
   readonly threadId?: ThreadId;
   readonly requestedByAgentId?: AgentId;
   readonly requestedByUserId?: UserId;
@@ -387,8 +389,111 @@ export interface AgentTurnRecord {
   readonly outputMessageId: MessageId | null;
   readonly wakeReason: string | null;
   readonly budgetUnits: number;
+  readonly idempotencyKey: string | null;
   readonly metadata: JsonObject;
   readonly createdAt: string;
   readonly startedAt: string | null;
   readonly finishedAt: string | null;
+}
+
+export interface AgentSpecialtyRecord {
+  readonly agentId: AgentId;
+  readonly domain: string;
+  readonly description: string;
+  readonly priority: number;
+  readonly isPrimary: boolean;
+}
+
+export interface AgentInterestRecord {
+  readonly agentId: AgentId;
+  readonly interest: string;
+  readonly priority: number;
+}
+
+export interface ProviderUsageRecord {
+  readonly id: string;
+  readonly providerName: string;
+  readonly modelName: string;
+  readonly jobId: JobId | null;
+  readonly agentTurnId: string | null;
+  readonly requestId: string | null;
+  readonly status: "started" | "completed" | "failed" | "timed_out";
+  readonly promptTokens: number | null;
+  readonly completionTokens: number | null;
+  readonly totalTokens: number | null;
+  readonly durationMs: number | null;
+  readonly errorSummary: string | null;
+  readonly idempotencyKey: string;
+  readonly metadata: JsonObject;
+  readonly createdAt: string;
+}
+
+export interface CreateProviderUsageInput {
+  readonly id?: string;
+  readonly providerName: string;
+  readonly modelName: string;
+  readonly jobId?: JobId;
+  readonly agentTurnId?: string;
+  readonly requestId?: string;
+  readonly status: ProviderUsageRecord["status"];
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
+  readonly totalTokens?: number;
+  readonly durationMs?: number;
+  readonly errorSummary?: string;
+  readonly idempotencyKey: string;
+  readonly metadata?: JsonObject;
+}
+
+export interface AgentRequestRecord {
+  readonly id: string;
+  readonly threadId: ThreadId;
+  readonly jobId: JobId | null;
+  readonly agentTurnId: string | null;
+  readonly requestedByAgentId: AgentId;
+  readonly requestedAgentId: AgentId;
+  readonly status: "open" | "accepted" | "completed" | "dismissed";
+  readonly requestText: string;
+  readonly metadata: JsonObject;
+  readonly idempotencyKey: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+}
+
+export interface CreateAgentRequestInput {
+  readonly id?: string;
+  readonly threadId: ThreadId;
+  readonly jobId?: JobId;
+  readonly agentTurnId?: string;
+  readonly requestedByAgentId: AgentId;
+  readonly requestedAgentId: AgentId;
+  readonly requestText: string;
+  readonly idempotencyKey: string;
+  readonly metadata?: JsonObject;
+}
+
+export interface AgentVoteRecord {
+  readonly id: string;
+  readonly threadId: ThreadId;
+  readonly agentTurnId: string;
+  readonly agentId: AgentId;
+  readonly optionKey: string;
+  readonly confidence: number;
+  readonly rationale: string | null;
+  readonly metadata: JsonObject;
+  readonly idempotencyKey: string;
+  readonly createdAt: string;
+}
+
+export interface CreateAgentVoteInput {
+  readonly id?: string;
+  readonly threadId: ThreadId;
+  readonly agentTurnId: string;
+  readonly agentId: AgentId;
+  readonly optionKey: string;
+  readonly confidence: number;
+  readonly rationale?: string;
+  readonly idempotencyKey: string;
+  readonly metadata?: JsonObject;
 }

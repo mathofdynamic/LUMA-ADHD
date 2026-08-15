@@ -21,6 +21,7 @@ interface JobRow {
   attempt_count: number;
   max_attempts: number;
   chain_depth: number;
+  last_enqueued_at: string | null;
   lease_owner: string | null;
   lease_expires_at: string | null;
   last_error: string | null;
@@ -42,6 +43,7 @@ function mapJob(row: JobRow): JobRecord {
     attemptCount: toNumber(row.attempt_count, "jobs.attempt_count"),
     maxAttempts: toNumber(row.max_attempts, "jobs.max_attempts"),
     chainDepth: toNumber(row.chain_depth, "jobs.chain_depth"),
+    lastEnqueuedAt: toNullableString(row.last_enqueued_at),
     leaseOwner: toNullableString(row.lease_owner),
     leaseExpiresAt: toNullableString(row.lease_expires_at),
     lastError: toNullableString(row.last_error),
@@ -149,6 +151,51 @@ export class JobRepository {
       .all<JobRow>();
 
     return result.results.map(mapJob);
+  }
+
+  async listDueToEnqueue(
+    asOf: string,
+    limit = 25,
+    minimumIntervalSeconds = 60,
+  ): Promise<readonly JobRecord[]> {
+    const safeLimit = requireLimit(limit, "job enqueue list limit", 100);
+    if (!Number.isInteger(minimumIntervalSeconds) || minimumIntervalSeconds < 0) {
+      throw new ValidationError("job enqueue interval must be a non-negative integer");
+    }
+    const timestamp = Date.parse(asOf);
+    if (!Number.isFinite(timestamp)) {
+      throw new ValidationError("job enqueue timestamp must be a valid ISO timestamp");
+    }
+    const lastAllowed = new Date(timestamp - minimumIntervalSeconds * 1000).toISOString();
+    const result = await this.database
+      .prepare(
+        `SELECT * FROM jobs
+         WHERE status IN ('pending', 'retry_scheduled')
+           AND due_at <= ?
+           AND (last_enqueued_at IS NULL OR last_enqueued_at <= ?)
+         ORDER BY priority DESC, due_at ASC, created_at ASC
+         LIMIT ?`,
+      )
+      .bind(asOf, lastAllowed, safeLimit)
+      .all<JobRow>();
+
+    return result.results.map(mapJob);
+  }
+
+  async markEnqueued(id: string, asOf = nowIso()): Promise<JobRecord> {
+    const result = await this.database
+      .prepare(
+        `UPDATE jobs SET last_enqueued_at = ?, updated_at = ?
+         WHERE id = ? AND status IN ('pending', 'retry_scheduled')`,
+      )
+      .bind(asOf, asOf, id)
+      .run();
+
+    if (result.meta.changes !== 1) {
+      throw new NotFoundError("enqueuable job", id);
+    }
+
+    return this.getById(id);
   }
 
   async claim(

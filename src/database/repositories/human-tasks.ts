@@ -72,8 +72,9 @@ export class HumanTaskRepository {
         `INSERT INTO human_tasks (
           id, thread_id, requested_by_agent_id, requested_by_user_id,
           assignee_user_id, title, description, priority, due_at,
-          metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          metadata_json, idempotency_key, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT DO NOTHING`,
       )
       .bind(
         id,
@@ -86,10 +87,22 @@ export class HumanTaskRepository {
         priority,
         input.dueAt ?? null,
         encodeObject(input.metadata, "humanTask.metadata"),
+        input.idempotencyKey ?? null,
         timestamp,
         timestamp,
       )
       .run();
+
+    if (input.idempotencyKey !== undefined) {
+      const existing = await this.database
+        .prepare("SELECT id FROM human_tasks WHERE idempotency_key = ?")
+        .bind(input.idempotencyKey)
+        .first<{ id: string }>();
+      if (!existing) {
+        throw new NotFoundError("human task idempotency key", input.idempotencyKey);
+      }
+      return this.getById(existing.id);
+    }
 
     return this.getById(id);
   }

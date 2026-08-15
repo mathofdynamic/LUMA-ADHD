@@ -38,6 +38,8 @@ const migrationTables = [
   "god_reviews",
   "god_directives",
   "provider_usage",
+  "agent_requests",
+  "agent_votes",
   "telegram_outbound",
   "telegram_outbound_parts",
   "artifacts",
@@ -62,6 +64,12 @@ describe("Phase 01 D1 migration and seeds", () => {
     expect(agents).toHaveLength(9);
     expect(agents.find((agent) => agent.slug === "product")?.rank).toBe(10);
     expect(agents.find((agent) => agent.slug === "god")?.isSupervisor).toBe(true);
+    expect(agents.find((agent) => agent.slug === "product")?.displayName).toBe("رادین | محصول");
+    expect(agents.find((agent) => agent.slug === "heretic")?.displayName).toBe("کاوه | مخالف");
+    const activeConfigs = await env.DB
+      .prepare("SELECT COUNT(*) AS count FROM agent_configurations WHERE is_active = 1 AND version = 2")
+      .first<{ count: number }>();
+    expect(activeConfigs?.count).toBe(9);
   });
 });
 

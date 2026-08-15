@@ -6,6 +6,13 @@ export const FOUNDATION_GUARDRAILS = Object.freeze({
   queueChainMaxDepth: 3,
   schedulerWorkPerTick: 3,
   maxRetries: 3,
+  providerMaxAttempts: 2,
+  providerTimeoutMilliseconds: 28_000,
+  maxStructuredRepairAttempts: 1,
+  recentContextMessageLimit: 12,
+  maxAgentActionContentCharacters: 12_000,
+  ambientOpportunityIntervalMinutes: 240,
+  inactivityRecoveryHours: 6,
   telegramMessageMaxCharacters: 4096,
 } as const);
 

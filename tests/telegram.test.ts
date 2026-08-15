@@ -6,6 +6,7 @@ import { splitTelegramMessage } from "../src/guardrails";
 import {
   createTelegramApplication,
   parseTelegramConfig,
+  renderTelegramText,
   TelegramBotApiTransport,
 } from "../src/telegram";
 import {
@@ -219,9 +220,94 @@ describe("Phase 02 Telegram ingress", () => {
       }),
     ).rejects.toThrow("TELEGRAM_GROUP_ID and TELEGRAM_WEBHOOK_SECRET are required");
   });
+
+  it("fails closed when a plain-text deployment strips JSON identity quotes", async () => {
+    const response = await handleTelegramWebhook(
+      new Request("https://luma.example/telegram/webhook/gateway", {
+        method: "POST",
+        body: "{}",
+        headers: { "content-type": "application/json" },
+      }),
+      {
+        DB: env.DB,
+        TELEGRAM_GROUP_ID: groupId,
+        TELEGRAM_ADMIN_USER_IDS: "42",
+        TELEGRAM_WEBHOOK_SECRET: "test-secret",
+        TELEGRAM_BOT_IDENTITIES_JSON:
+          "{gateway:{telegramUserId:9000,username:luma_gateway}}",
+      } satisfies TelegramRuntimeEnv,
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "telegram_configuration_invalid",
+    });
+  });
 });
 
 describe("Phase 02 Telegram outbound projection", () => {
+  it("escapes ordinary text and preserves markup only for explicit HTML projections", () => {
+    const markup = "<b>Bold</b> & <i>italic</i>";
+
+    expect(renderTelegramText(markup)).toEqual([
+      "&lt;b&gt;Bold&lt;/b&gt; &amp; &lt;i&gt;italic&lt;/i&gt;",
+    ]);
+    expect(renderTelegramText(markup, "telegram_html")).toEqual(["<b>Bold</b> &amp; <i>italic</i>"]);
+  });
+
+  it("bolds only the exact participant name in Persian direct address", () => {
+    const address = "<b>سارا</b>، پیشنهادت درباره آنبوردینگ خوبه، ولی یک ریسک داریم.";
+
+    expect(renderTelegramText(address, "telegram_html")).toEqual([address]);
+    expect(renderTelegramText(address, "telegram_html")[0]).not.toContain(
+      "<b>سارا، پیشنهادت",
+    );
+  });
+
+  it("keeps agent-to-agent address, bullets, ordered steps, and metrics scannable", () => {
+    const proposal = [
+      "<b>رادین</b>، از دید رشد یک فرض مهم هنوز بررسی نشده.",
+      "",
+      "<b>پیشنهاد من:</b>",
+      "• یک تست با کاربران جدید",
+      "• اندازه‌گیری نرخ فعال‌سازی (<code>Activation Rate</code>)",
+      "",
+      "1. نسخه کوتاه را اجرا کنیم.",
+      "2. نتیجه را با نسخه فعلی مقایسه کنیم.",
+    ].join("\n");
+
+    expect(renderTelegramText(proposal, "telegram_html")).toEqual([proposal]);
+    expect(proposal.indexOf("1. ")).toBeLessThan(proposal.indexOf("2. "));
+    expect(proposal).not.toContain("1️⃣");
+  });
+
+  it("does not add a blockquote merely because content is a reply", () => {
+    const contribution = "<b>رادین</b>، برای این فرضیه یک تست کوچک کافی است.";
+
+    expect(renderTelegramText(contribution, "telegram_html")[0]).not.toContain("<blockquote>");
+  });
+
+  it("sanitizes unsupported or malformed HTML and removes Markdown leakage", () => {
+    expect(renderTelegramText("<script>alert(1)</script> **bold**\n### عنوان", "telegram_html"))
+      .toEqual(["alert(1) bold\nعنوان"]);
+    expect(renderTelegramText("<b>بدون پایان", "telegram_html")).toEqual(["بدون پایان"]);
+    expect(renderTelegramText("ordinary text without formatting", "telegram_html"))
+      .toEqual(["ordinary text without formatting"]);
+  });
+
+  it("keeps HTML tags balanced when a long formatted message is split", () => {
+    const content = `<b>${"آ".repeat(4_200)}</b>`;
+    const parts = renderTelegramText(content, "telegram_html");
+
+    expect(parts.length).toBe(2);
+    expect(parts[0]?.startsWith("<b>")).toBe(true);
+    expect(parts[0]?.endsWith("</b>")).toBe(true);
+    expect(parts[1]?.startsWith("<b>")).toBe(true);
+    expect(parts[1]?.endsWith("</b>")).toBe(true);
+    expect(parts.every((part) => Array.from(part).length <= 4096)).toBe(true);
+  });
+
   it("keeps Telegram HTTP behavior inside the adapter and normalizes success", async () => {
     let requestBody = "";
     const config = parseTelegramConfig({
@@ -249,8 +335,38 @@ describe("Phase 02 Telegram outbound projection", () => {
     expect(JSON.parse(requestBody)).toMatchObject({
       chat_id: groupId,
       parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
       reply_parameters: { message_id: "59" },
     });
+  });
+
+  it("forwards an explicit HTML projection through the canonical outbound mapping", async () => {
+    const transport = new FakeTelegramTransport();
+    const app = application(transport);
+    const inbound = await app.ingest({
+      botAlias: "gateway",
+      receivedAt: "2026-08-14T08:00:00.000Z",
+      payload: telegramUpdate(20_010, 30_010, "Validate rich output."),
+    });
+    const chat = await repositories.chats.findByTelegramId(groupId);
+    expect(chat).not.toBeNull();
+    const markup = "<b>Radin formatting test</b>";
+
+    const result = await app.projectAgentMessage({
+      threadId: inbound.threadId as string,
+      chatId: chat!.id,
+      agentId: "agent-product",
+      contentText: markup,
+      contentFormat: "telegram_html",
+      idempotencyKey: "outbound-html-20010",
+      metadata: { source: "phase02_local_formatting_smoke" },
+    });
+    const outbound = await repositories.telegramOutbound.getByIdempotencyKey("outbound-html-20010");
+
+    expect(result.status).toBe("sent");
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]?.text).toBe(markup);
+    expect(outbound.payload).toMatchObject({ parseMode: "HTML", contentFormat: "telegram_html" });
   });
 
   it("binds the Worker fetch receiver before invoking Telegram HTTP", async () => {
@@ -317,6 +433,57 @@ describe("Phase 02 Telegram outbound projection", () => {
     const canonical = await repositories.messages.getById(first.messageId);
     expect(canonical.telegramMessageId).toBe(first.telegramMessageIds[0]);
     expect(canonical.telegramBotAlias).toBe("product");
+  });
+
+  it("preserves cross-persona reply relationships internally without sending an invalid Telegram reply target", async () => {
+    const transport = new FakeTelegramTransport();
+    const app = createTelegramApplication({
+      repositories,
+      config: parseTelegramConfig({
+        TELEGRAM_GROUP_ID: groupId,
+        TELEGRAM_ADMIN_USER_IDS: "42",
+        TELEGRAM_WEBHOOK_SECRET: "test-secret",
+        TELEGRAM_BOT_IDENTITIES_JSON: JSON.stringify({
+          gateway: { telegramUserId: "9000", username: "luma_gateway" },
+          product: { telegramUserId: "9001", username: "luma_product" },
+          customer: { telegramUserId: "9002", username: "luma_customer" },
+        }),
+      }),
+      transport,
+      now: () => "2026-08-14T08:00:00.000Z",
+    });
+    const inbound = await app.ingest({
+      botAlias: "gateway",
+      receivedAt: "2026-08-14T08:00:00.000Z",
+      payload: telegramUpdate(20_010, 30_010, "Keep the internal reply chain."),
+    });
+    const chat = await repositories.chats.findByTelegramId(groupId);
+    expect(chat).not.toBeNull();
+
+    const product = await app.projectAgentMessage({
+      threadId: inbound.threadId as string,
+      chatId: chat!.id,
+      agentId: "agent-product",
+      contentText: "The product perspective.",
+      idempotencyKey: "cross-persona-product-20010",
+    });
+    const customer = await app.projectAgentMessage({
+      threadId: inbound.threadId as string,
+      chatId: chat!.id,
+      agentId: "agent-customer",
+      contentText: "The customer perspective builds on it.",
+      replyToMessageId: product.messageId,
+      idempotencyKey: "cross-persona-customer-20010",
+    });
+
+    expect(customer.status).toBe("sent");
+    expect(transport.calls).toHaveLength(2);
+    expect(transport.calls[1]?.replyToTelegramMessageId).toBeUndefined();
+    const canonical = await repositories.messages.getById(customer.messageId);
+    expect(canonical.replyToMessageId).toBe(product.messageId);
+    const outbound = await repositories.telegramOutbound.getByIdempotencyKey("cross-persona-customer-20010");
+    const parts = await repositories.telegramOutbound.listParts(outbound.id);
+    expect(parts[0]?.replyToTelegramMessageId).toBeNull();
   });
 
   it("keeps canonical output when Telegram fails and records bounded retry data", async () => {

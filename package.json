@@ -16,7 +16,8 @@
     "dev:admin": "vite --config admin/vite.config.ts",
     "dev:worker": "wrangler dev --local",
     "migrations:local": "wrangler d1 migrations apply luma-adhd --local",
-    "check:startup": "wrangler check startup"
+    "check:startup": "wrangler check startup",
+    "nebula:smoke": "esbuild scripts/nebula-smoke.ts --bundle --platform=node --format=esm --outfile=.nebula-smoke.bundle.mjs && node .nebula-smoke.bundle.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -25,6 +26,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.21.3",
     "@cloudflare/workers-types": "^5.20260814.1",
+    "esbuild": "^0.28.1",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",

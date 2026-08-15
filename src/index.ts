@@ -5,6 +5,7 @@ import type {
   ScheduledController,
 } from "@cloudflare/workers-types";
 
+import { createAgentScheduler } from "./agents/factory";
 import { routeApi } from "./api/router";
 import { consumeAgentJobs, type AgentJobMessage } from "./jobs";
 import { handleTelegramWebhook } from "./telegram/webhook";
@@ -14,7 +15,7 @@ function logScheduleTick(controller: ScheduledController): void {
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "02-telegram",
+      phase: "03-agent-runtime",
     }),
   );
 }
@@ -36,18 +37,30 @@ const handler = {
 
   async scheduled(
     controller: ScheduledController,
-    _env: Env,
+    env: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
     logScheduleTick(controller);
+    try {
+      const result = await createAgentScheduler(env).tick();
+      console.log(JSON.stringify({
+        event: "agent_scheduler_tick_completed",
+        dueSchedule: result.dueSchedule,
+        ambientJobsCreated: result.ambientJobsCreated,
+        dueJobsEnqueued: result.dueJobsEnqueued,
+        inactivityRecovery: result.inactivityRecovery,
+      }));
+    } catch {
+      console.warn(JSON.stringify({ event: "agent_scheduler_tick_failed" }));
+    }
   },
 
   async queue(
     batch: MessageBatch<AgentJobMessage>,
-    _env: Env,
+    env: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
-    consumeAgentJobs(batch);
+    await consumeAgentJobs(batch, env);
   },
 } satisfies ExportedHandler<Env, AgentJobMessage>;
 

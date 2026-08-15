@@ -8,6 +8,6 @@ export function versionResponse(request: Request): Response {
   return jsonResponse({
     name: "luma-adhd",
     version: "0.1.0",
-    phase: "02-telegram",
+    phase: "03-agent-runtime",
   });
 }

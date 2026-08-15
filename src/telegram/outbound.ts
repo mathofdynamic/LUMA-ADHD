@@ -107,7 +107,8 @@ export class TelegramOutboundService {
     });
     await this.dependencies.repositories.threads.touchActivity(input.threadId, this.now());
 
-    const renderedParts = renderTelegramText(input.contentText);
+    const contentFormat = input.contentFormat ?? "plain_text";
+    const renderedParts = renderTelegramText(input.contentText, contentFormat);
     const outbound = await this.dependencies.repositories.telegramOutbound.create({
       messageId: message.id,
       threadId: input.threadId,
@@ -118,6 +119,7 @@ export class TelegramOutboundService {
       payload: {
         source: "telegram_projection",
         parseMode: "HTML",
+        contentFormat,
         partCount: renderedParts.length,
         idempotencyKey: input.idempotencyKey,
       },
@@ -127,7 +129,15 @@ export class TelegramOutboundService {
     const replyTo = input.replyToMessageId === undefined
       ? null
       : await this.dependencies.repositories.messages.getById(input.replyToMessageId);
-    const replyToTelegramMessageId = replyTo?.telegramChatId === chat.telegramChatId
+    // Telegram can reject a bot reply to a message emitted by a different
+    // persona bot even when the canonical message mapping is valid. Keep the
+    // internal relationship in D1, but project cross-persona contributions as
+    // standalone messages. Human-originated replies remain threaded visibly.
+    const crossPersonaBotReply = replyTo?.authorType === "agent"
+      && replyTo.telegramBotAlias !== null
+      && replyTo.telegramBotAlias !== bot.alias;
+    const replyToTelegramMessageId = !crossPersonaBotReply
+      && replyTo?.telegramChatId === chat.telegramChatId
       ? replyTo.telegramMessageId ?? undefined
       : undefined;
     const parts = await this.dependencies.repositories.telegramOutbound.createParts(

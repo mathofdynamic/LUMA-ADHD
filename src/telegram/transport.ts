@@ -78,6 +78,7 @@ export class TelegramBotApiTransport implements TelegramTransport {
       chat_id: input.telegramChatId,
       text: input.text,
       parse_mode: TELEGRAM_PARSE_MODE,
+      link_preview_options: { is_disabled: true },
     };
     if (input.replyToTelegramMessageId !== undefined) {
       payload.reply_parameters = {

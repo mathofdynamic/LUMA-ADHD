@@ -8,6 +8,8 @@ coverage/
 .dev.vars.*
 !.dev.vars.example
 .telegram-env
+.nebula-env
+.nebula-smoke.bundle.mjs
 
 # Other local environment files.
 .env
