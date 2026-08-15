@@ -4,6 +4,8 @@ import { NotFoundError, ValidationError } from "../errors";
 import { toBoolean, toJsonObject, toNullableString, toNumber } from "../rows";
 import { encodeObject, requireNonEmpty } from "../validation";
 import type {
+  AgentInterestRecord,
+  AgentSpecialtyRecord,
   AgentConfigurationRecord,
   AgentRecord,
   CreateAgentInput,
@@ -164,6 +166,50 @@ export class AgentRepository {
       .all<AgentRow>();
 
     return result.results.map(mapAgent);
+  }
+
+  async listSpecialties(agentId: string): Promise<readonly AgentSpecialtyRecord[]> {
+    const result = await this.database
+      .prepare(
+        `SELECT agent_id, domain, description, priority, is_primary
+         FROM agent_specialties
+         WHERE agent_id = ?
+         ORDER BY is_primary DESC, priority DESC, domain ASC`,
+      )
+      .bind(agentId)
+      .all<{
+        agent_id: string;
+        domain: string;
+        description: string;
+        priority: number;
+        is_primary: number;
+      }>();
+
+    return result.results.map((row) => ({
+      agentId: row.agent_id,
+      domain: row.domain,
+      description: row.description,
+      priority: Number(row.priority),
+      isPrimary: row.is_primary === 1,
+    }));
+  }
+
+  async listInterests(agentId: string): Promise<readonly AgentInterestRecord[]> {
+    const result = await this.database
+      .prepare(
+        `SELECT agent_id, interest, priority
+         FROM agent_interests
+         WHERE agent_id = ?
+         ORDER BY priority DESC, interest ASC`,
+      )
+      .bind(agentId)
+      .all<{ agent_id: string; interest: string; priority: number }>();
+
+    return result.results.map((row) => ({
+      agentId: row.agent_id,
+      interest: row.interest,
+      priority: Number(row.priority),
+    }));
   }
 
   async createConfiguration(input: AgentConfigurationInput): Promise<AgentConfigurationRecord> {

@@ -241,7 +241,7 @@ try {
   Write-Output ('TELEGRAM_PART_COUNT=' + @($result.telegramMessageIds).Count)
   Write-Output ('SIMULATED_FAILURE=' + [bool]$SimulateFailure)
 } finally {
-  if ($null -ne $workerProcess) {
+  if ($null -ne $workerProcess -and $workerProcess.Id -gt 0) {
     Stop-ProcessTree ([int]$workerProcess.Id)
   }
   if ($null -ne $http) {

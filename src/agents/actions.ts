@@ -1,0 +1,162 @@
+import type { JsonObject } from "../database/validation";
+import { FOUNDATION_GUARDRAILS } from "../guardrails";
+
+export const AGENT_INTENTS = [
+  "SPEAK",
+  "WAIT",
+  "REQUEST_AGENT",
+  "REQUEST_HUMAN",
+  "PROPOSE_THREAD",
+  "REOPEN_THREAD",
+  "FILE_WORK",
+  "DRAW",
+  "VOTE",
+] as const;
+
+export type AgentIntent = (typeof AGENT_INTENTS)[number];
+
+export interface AgentAction {
+  readonly intent: AgentIntent;
+  readonly content: string | null;
+  readonly confidence: number;
+  readonly reasonSummary: string;
+  readonly targetAgentId: string | null;
+  readonly targetThreadId: string | null;
+  readonly metadata: JsonObject;
+}
+
+export class AgentActionValidationError extends Error {
+  readonly problems: readonly string[];
+
+  constructor(problems: readonly string[]) {
+    super(`Invalid agent action: ${problems.join("; ")}`);
+    this.name = "AgentActionValidationError";
+    this.problems = problems;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return isRecord(value);
+}
+
+function readNullableString(value: unknown, field: string, problems: string[]): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    problems.push(`${field} must be a non-empty string or null`);
+    return null;
+  }
+  return value;
+}
+
+function parseJsonText(text: string): unknown {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/iu);
+  return JSON.parse(fenced?.[1] ?? trimmed) as unknown;
+}
+
+export function validateAgentAction(value: unknown): AgentAction {
+  const problems: string[] = [];
+  if (!isRecord(value)) {
+    throw new AgentActionValidationError(["response must be a JSON object"]);
+  }
+
+  const intent = value.intent;
+  if (typeof intent !== "string" || !(AGENT_INTENTS as readonly string[]).includes(intent)) {
+    problems.push(`intent must be one of ${AGENT_INTENTS.join(", ")}`);
+  }
+
+  const confidence = value.confidence;
+  if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    problems.push("confidence must be a number between 0 and 1");
+  }
+
+  const reasonSummary = value.reason_summary;
+  if (typeof reasonSummary !== "string" || reasonSummary.trim().length === 0) {
+    problems.push("reason_summary must be a non-empty string");
+  } else if (Array.from(reasonSummary).length > 500) {
+    problems.push("reason_summary must not exceed 500 characters");
+  }
+
+  let content: string | null = null;
+  if (value.content !== undefined && value.content !== null) {
+    if (typeof value.content !== "string") {
+      problems.push("content must be a string or null");
+    } else {
+      content = value.content;
+      if (Array.from(content).length > FOUNDATION_GUARDRAILS.maxAgentActionContentCharacters) {
+        problems.push(`content must not exceed ${FOUNDATION_GUARDRAILS.maxAgentActionContentCharacters} characters`);
+      }
+    }
+  }
+
+  const targetAgentId = readNullableString(value.target_agent_id, "target_agent_id", problems);
+  const targetThreadId = readNullableString(value.target_thread_id, "target_thread_id", problems);
+  const metadata = value.metadata === undefined ? {} : value.metadata;
+  if (!isJsonObject(metadata)) {
+    problems.push("metadata must be a JSON object");
+  }
+
+  if (intent === "SPEAK" && (content === null || content.trim().length === 0)) {
+    problems.push("SPEAK requires non-empty content");
+  }
+  if (intent === "PROPOSE_THREAD" && (content === null || content.trim().length === 0)) {
+    problems.push("PROPOSE_THREAD requires non-empty content");
+  }
+
+  if (problems.length > 0) {
+    throw new AgentActionValidationError(problems);
+  }
+
+  return {
+    intent: intent as AgentIntent,
+    content,
+    confidence: confidence as number,
+    reasonSummary: reasonSummary as string,
+    targetAgentId,
+    targetThreadId,
+    metadata: metadata as JsonObject,
+  };
+}
+
+export function parseAgentAction(text: string): AgentAction {
+  let value: unknown;
+  try {
+    value = parseJsonText(text);
+  } catch (error: unknown) {
+    throw new AgentActionValidationError([`response must be valid JSON: ${String(error).slice(0, 180)}`]);
+  }
+  return validateAgentAction(value);
+}
+
+export const AGENT_ACTION_SCHEMA = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["intent", "confidence", "reason_summary", "target_agent_id", "target_thread_id", "metadata"],
+  "properties": {
+    "intent": {"type": "string", "enum": ["SPEAK", "WAIT", "REQUEST_AGENT", "REQUEST_HUMAN", "PROPOSE_THREAD", "REOPEN_THREAD", "FILE_WORK", "DRAW", "VOTE"]},
+    "content": {"type": ["string", "null"], "description": "Required for SPEAK and PROPOSE_THREAD; absent or null for WAIT."},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "reason_summary": {"type": "string", "maxLength": 500},
+    "target_agent_id": {"type": ["string", "null"]},
+    "target_thread_id": {"type": ["string", "null"]},
+    "metadata": {"type": "object"}
+  }
+}`;
+
+export function actionExample(): string {
+  return JSON.stringify({
+    intent: "SPEAK",
+    content: "یک پیشنهاد کوتاه و قابل آزمون.",
+    confidence: 0.72,
+    reason_summary: "این پاسخ یک گام تصمیم‌پذیر اضافه می‌کند.",
+    target_agent_id: null,
+    target_thread_id: null,
+    metadata: {},
+  });
+}
