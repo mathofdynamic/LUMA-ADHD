@@ -43,6 +43,47 @@ function isJsonObject(value: unknown): value is JsonObject {
   return isRecord(value);
 }
 
+function repairInvalidUnicodeEscapes(text: string): string {
+  let repaired = "";
+  let inString = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '"') {
+      repaired += character;
+      inString = !inString;
+      continue;
+    }
+    if (!inString || character !== "\\") {
+      repaired += character;
+      continue;
+    }
+
+    const next = text[index + 1];
+    if (next === undefined) {
+      repaired += "\\\\";
+      continue;
+    }
+    if ('"\\/bfnrt'.includes(next)) {
+      repaired += `\\${next}`;
+      index += 1;
+      continue;
+    }
+    if (next === "u" && /^[0-9a-f]{4}$/iu.test(text.slice(index + 2, index + 6))) {
+      repaired += text.slice(index, index + 6);
+      index += 5;
+      continue;
+    }
+
+    // Nebula occasionally emits a literal invalid \u sequence inside a
+    // string. Preserve the visible text as a literal backslash and let the
+    // normal schema validator decide whether the action is otherwise valid.
+    repaired += "\\\\";
+  }
+
+  return repaired;
+}
+
 function readNullableString(value: unknown, field: string, problems: string[]): string | null {
   if (value === undefined || value === null) {
     return null;
@@ -57,7 +98,15 @@ function readNullableString(value: unknown, field: string, problems: string[]): 
 function parseJsonText(text: string): unknown {
   const trimmed = text.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/iu);
-  return JSON.parse(fenced?.[1] ?? trimmed) as unknown;
+  const source = fenced?.[1] ?? trimmed;
+  try {
+    return JSON.parse(source) as unknown;
+  } catch (error: unknown) {
+    if (!/unicode escape/iu.test(String(error))) {
+      throw error;
+    }
+    return JSON.parse(repairInvalidUnicodeEscapes(source)) as unknown;
+  }
 }
 
 export function validateAgentAction(value: unknown): AgentAction {

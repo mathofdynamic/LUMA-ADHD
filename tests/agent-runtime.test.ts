@@ -151,6 +151,16 @@ describe("Phase 03 action contract and provider boundary", () => {
     );
   });
 
+  it("preserves literal text when a provider emits an invalid Unicode escape", () => {
+    const malformed = [
+      '{"intent":"SPEAK","content":"',
+      "\\u06f",
+      '","confidence":0.72,"reason_summary":"A useful step.","target_agent_id":null,"target_thread_id":null,"metadata":{}}',
+    ].join("");
+
+    expect(parseAgentAction(malformed).content).toBe("\\u06f");
+  });
+
   it("repairs one malformed provider response and persists usage", async () => {
     const provider = new FakeProvider().enqueueJson("not-json").enqueueJson(action("SPEAK", { content: "A repaired contribution." }));
     const context = await fixture("Repair this response once.", { addressedAgentId: "agent-product" });

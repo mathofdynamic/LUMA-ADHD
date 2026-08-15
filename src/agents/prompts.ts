@@ -97,6 +97,9 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     "FILE_WORK and DRAW are deferred capability signals in Phase 03. VOTE records a structured foundation only.",
     `\nOUTPUT SCHEMA\n${AGENT_ACTION_SCHEMA}`,
     `Valid example:\n${actionExample()}`,
+    "Keep content concise (at most 400 Unicode characters) and reason_summary concise (at most 160 characters).",
+    "Use literal UTF-8 Persian or English text in string values. Do not emit \\uXXXX escapes.",
+    "Return one complete JSON object without Markdown fences, prose, or chain-of-thought.",
     "reason_summary is a short audit-friendly rationale, not hidden reasoning. Do not include chain-of-thought.",
   ].join("\n");
 

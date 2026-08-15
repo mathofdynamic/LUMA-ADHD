@@ -478,7 +478,7 @@ export class AgentRuntimeService {
         systemPrompt: prompt.systemPrompt,
         messages: prompt.messages,
         temperature: 0.2,
-        maxOutputTokens: 512,
+        maxOutputTokens: 256,
         timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
         metadata: { agentId: agent.id, threadId: thread.id },
       });
@@ -528,7 +528,7 @@ export class AgentRuntimeService {
             }),
           }],
           temperature: 0,
-          maxOutputTokens: 512,
+          maxOutputTokens: 256,
           timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
           metadata: { repair: "true", agentId: agent.id, threadId: thread.id },
         });

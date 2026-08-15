@@ -219,6 +219,30 @@ describe("Phase 02 Telegram ingress", () => {
       }),
     ).rejects.toThrow("TELEGRAM_GROUP_ID and TELEGRAM_WEBHOOK_SECRET are required");
   });
+
+  it("fails closed when a plain-text deployment strips JSON identity quotes", async () => {
+    const response = await handleTelegramWebhook(
+      new Request("https://luma.example/telegram/webhook/gateway", {
+        method: "POST",
+        body: "{}",
+        headers: { "content-type": "application/json" },
+      }),
+      {
+        DB: env.DB,
+        TELEGRAM_GROUP_ID: groupId,
+        TELEGRAM_ADMIN_USER_IDS: "42",
+        TELEGRAM_WEBHOOK_SECRET: "test-secret",
+        TELEGRAM_BOT_IDENTITIES_JSON:
+          "{gateway:{telegramUserId:9000,username:luma_gateway}}",
+      } satisfies TelegramRuntimeEnv,
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "telegram_configuration_invalid",
+    });
+  });
 });
 
 describe("Phase 02 Telegram outbound projection", () => {
