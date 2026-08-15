@@ -1,4 +1,4 @@
-/** Central Phase 00 safety and cost defaults. Later phases may override these
+/** Central safety and cost defaults. Later phases may override these
  * only through an explicit, validated configuration path. */
 export const FOUNDATION_GUARDRAILS = Object.freeze({
   interactiveBurstMaxTurns: 6,
@@ -19,27 +19,34 @@ export function splitTelegramMessage(
     throw new Error("maxCharacters must be a positive integer");
   }
 
-  if (message.length <= maxCharacters) {
+  const codePoints = Array.from(message);
+  if (codePoints.length <= maxCharacters) {
     return [message];
   }
 
   const chunks: string[] = [];
-  let remaining = message;
+  let start = 0;
 
-  while (remaining.length > maxCharacters) {
+  while (codePoints.length - start > maxCharacters) {
     let cutAt = maxCharacters;
-    const lineBreak = remaining.lastIndexOf("\n", maxCharacters);
+    const candidate = codePoints.slice(start, start + maxCharacters);
+    const lineBreak = Math.max(candidate.lastIndexOf("\n"), candidate.lastIndexOf("\r"));
 
     if (lineBreak > 0) {
-      cutAt = lineBreak;
+      cutAt = lineBreak + 1;
+    } else {
+      const whitespace = Math.max(candidate.lastIndexOf(" "), candidate.lastIndexOf("\t"));
+      if (whitespace > 0) {
+        cutAt = whitespace + 1;
+      }
     }
 
-    chunks.push(remaining.slice(0, cutAt));
-    remaining = remaining.slice(cutAt);
+    chunks.push(codePoints.slice(start, start + cutAt).join(""));
+    start += cutAt;
   }
 
-  if (remaining.length > 0) {
-    chunks.push(remaining);
+  if (start < codePoints.length) {
+    chunks.push(codePoints.slice(start).join(""));
   }
 
   return chunks;

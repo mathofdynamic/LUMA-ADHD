@@ -10,6 +10,7 @@ import { JobRepository } from "./jobs";
 import { TelegramIdentityRepository, ChatRepository, UserRepository } from "./identities";
 import { MessageRepository } from "./messages";
 import { ScheduledJobRepository } from "./scheduled-jobs";
+import { TelegramOutboundRepository } from "./telegram-outbound";
 import { ThreadLifecycleService, ThreadRepository } from "./threads";
 
 export {
@@ -22,6 +23,7 @@ export {
   JobRepository,
   MessageRepository,
   ScheduledJobRepository,
+  TelegramOutboundRepository,
   TelegramIdentityRepository,
   ThreadLifecycleService,
   ThreadRepository,
@@ -42,6 +44,7 @@ export function createRepositories(database: D1Database) {
     jobs: new JobRepository(client),
     messages: new MessageRepository(client),
     scheduledJobs: new ScheduledJobRepository(client),
+    telegramOutbound: new TelegramOutboundRepository(client),
     telegramIdentities: new TelegramIdentityRepository(client),
     threads,
     threadLifecycle: new ThreadLifecycleService(threads),

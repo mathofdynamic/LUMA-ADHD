@@ -137,8 +137,8 @@ export class ThreadRepository {
         `INSERT INTO threads (
           id, chat_id, title, state, priority, summary, turn_budget,
           phase_budget, cycle_budget, created_by_user_id, created_by_agent_id,
-          metadata_json, created_at, updated_at, last_activity_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          telegram_topic_id, metadata_json, created_at, updated_at, last_activity_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         id,
@@ -152,6 +152,7 @@ export class ThreadRepository {
         cycleBudget,
         input.createdByUserId ?? null,
         input.createdByAgentId ?? null,
+        input.telegramTopicId ?? null,
         encodeObject(input.metadata, "thread.metadata"),
         timestamp,
         timestamp,
@@ -188,6 +189,51 @@ export class ThreadRepository {
       .all<ThreadRow>();
 
     return result.results.map(mapThread);
+  }
+
+  async findMostRecentActiveByChat(chatId: string): Promise<ThreadRecord | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT * FROM threads
+         WHERE chat_id = ? AND deleted_at IS NULL
+           AND state NOT IN ('decided', 'rejected', 'parked')
+         ORDER BY last_activity_at DESC, created_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .bind(chatId)
+      .first<ThreadRow>();
+
+    return row ? mapThread(row) : null;
+  }
+
+  async findByTelegramTopic(chatId: string, telegramTopicId: string): Promise<ThreadRecord | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT * FROM threads
+         WHERE chat_id = ? AND telegram_topic_id = ? AND deleted_at IS NULL
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .bind(chatId, telegramTopicId)
+      .first<ThreadRow>();
+
+    return row ? mapThread(row) : null;
+  }
+
+  async touchActivity(threadId: ThreadId, asOf = nowIso()): Promise<ThreadRecord> {
+    const result = await this.database
+      .prepare(
+        `UPDATE threads
+         SET updated_at = ?, last_activity_at = ?
+         WHERE id = ? AND deleted_at IS NULL`,
+      )
+      .bind(asOf, asOf, threadId)
+      .run();
+
+    if (result.meta.changes !== 1) {
+      throw new NotFoundError("thread", threadId);
+    }
+
+    return this.getById(threadId);
   }
 
   async addParticipant(

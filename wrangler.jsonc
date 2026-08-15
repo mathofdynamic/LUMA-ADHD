@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "luma-adhd",
+  "account_id": "e691d5bc257b6135be4353568c1f7410",
   "main": "./src/index.ts",
   "compatibility_date": "2026-08-14",
   "compatibility_flags": ["nodejs_compat"],
@@ -14,9 +15,10 @@
   // intentionally absent; use .dev.vars locally and Wrangler secrets later.
   "vars": {
     "LUMA_ENVIRONMENT": "local",
-    "LUMA_PHASE": "01-data-and-core",
+    "LUMA_PHASE": "02-telegram",
     "TELEGRAM_GROUP_ID": "",
     "TELEGRAM_ADMIN_USER_IDS": "",
+    "TELEGRAM_BOT_IDENTITIES_JSON": "{}",
     "NEBULA_BASE_URL": "",
     "NEBULA_MODEL": "",
     "GOD_BASE_URL": "",
@@ -27,7 +29,7 @@
     {
       "binding": "DB",
       "database_name": "luma-adhd",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "0098077a-4f95-4a05-8225-72edfa2f1e05",
       "migrations_dir": "./migrations"
     }
   ],
@@ -60,10 +62,10 @@
     "directory": "./admin/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/telegram/*"]
   }
 
-  // Reserved future secret names (never add them to vars):
+  // Runtime secret names (never add them to vars):
   // TELEGRAM_WEBHOOK_SECRET, TELEGRAM_*_BOT_TOKEN, NEBULA_API_KEY,
   // GOD_API_KEY, ADMIN_AUTH_SECRET.
   // Optional Browser Rendering is intentionally not bound in Phase 00.

@@ -151,6 +151,74 @@ export class MessageRepository {
     return mapMessage(row);
   }
 
+  async findByTelegramUpdate(
+    telegramUpdateId: string,
+    telegramBotAlias: string,
+  ): Promise<MessageRecord | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT * FROM messages
+         WHERE telegram_update_id = ? AND telegram_bot_alias = ?
+         ORDER BY created_at ASC LIMIT 1`,
+      )
+      .bind(telegramUpdateId, telegramBotAlias)
+      .first<MessageRow>();
+
+    return row ? mapMessage(row) : null;
+  }
+
+  async findByTelegramReference(
+    telegramChatId: string,
+    telegramMessageId: string,
+  ): Promise<MessageRecord | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT * FROM messages
+         WHERE telegram_chat_id = ? AND telegram_message_id = ?
+         ORDER BY created_at ASC LIMIT 1`,
+      )
+      .bind(telegramChatId, telegramMessageId)
+      .first<MessageRow>();
+
+    return row ? mapMessage(row) : null;
+  }
+
+  async attachTelegramProjection(input: {
+    readonly messageId: string;
+    readonly telegramChatId: string;
+    readonly telegramMessageId: string;
+    readonly telegramBotAlias: string;
+  }): Promise<MessageRecord> {
+    const current = await this.getById(input.messageId);
+    if (current.telegramMessageId !== null) {
+      if (
+        current.telegramChatId === input.telegramChatId &&
+        current.telegramMessageId === input.telegramMessageId &&
+        current.telegramBotAlias === input.telegramBotAlias
+      ) {
+        return current;
+      }
+
+      throw new ValidationError(`message '${input.messageId}' already has a different Telegram projection`);
+    }
+
+    await this.database
+      .prepare(
+        `UPDATE messages SET
+           telegram_chat_id = ?, telegram_message_id = ?, telegram_bot_alias = ?
+         WHERE id = ? AND telegram_message_id IS NULL`,
+      )
+      .bind(
+        input.telegramChatId,
+        input.telegramMessageId,
+        input.telegramBotAlias,
+        input.messageId,
+      )
+      .run();
+
+    return this.getById(input.messageId);
+  }
+
   async listRecentByThread(threadId: string, limit = 30): Promise<readonly MessageRecord[]> {
     const safeLimit = requireLimit(limit, "message list limit", 200);
     const result = await this.database
