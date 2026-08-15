@@ -248,7 +248,7 @@ export class AgentRuntimeService {
     const profiles = await this.loadProfiles();
     const requestedAgentIds = await this.loadRequestedAgentIds(input.threadId);
     const existingTurns = await this.dependencies.repositories.agentTurns.listByJob(input.job.id, input.maxTurns);
-    const recentMessages = await this.dependencies.repositories.messages.listRecentByThread(
+    let recentMessages = await this.dependencies.repositories.messages.listRecentByThread(
       input.threadId,
       FOUNDATION_GUARDRAILS.recentContextMessageLimit,
     );
@@ -345,6 +345,13 @@ export class AgentRuntimeService {
       if (result.outputMessageId) {
         publicMessages += 1;
         replyToMessageId = result.outputMessageId;
+        const outputMessage = await this.dependencies.repositories.messages
+          .getById(result.outputMessageId)
+          .catch(() => null);
+        if (outputMessage) {
+          recentMessages = [...recentMessages, outputMessage]
+            .slice(-FOUNDATION_GUARDRAILS.recentContextMessageLimit);
+        }
       }
       if (result.retryableFailure) {
         stoppedReason = "retryable_provider_failure";

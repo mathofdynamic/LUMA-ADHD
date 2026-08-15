@@ -343,6 +343,57 @@ describe("Phase 02 Telegram outbound projection", () => {
     expect(canonical.telegramBotAlias).toBe("product");
   });
 
+  it("preserves cross-persona reply relationships internally without sending an invalid Telegram reply target", async () => {
+    const transport = new FakeTelegramTransport();
+    const app = createTelegramApplication({
+      repositories,
+      config: parseTelegramConfig({
+        TELEGRAM_GROUP_ID: groupId,
+        TELEGRAM_ADMIN_USER_IDS: "42",
+        TELEGRAM_WEBHOOK_SECRET: "test-secret",
+        TELEGRAM_BOT_IDENTITIES_JSON: JSON.stringify({
+          gateway: { telegramUserId: "9000", username: "luma_gateway" },
+          product: { telegramUserId: "9001", username: "luma_product" },
+          customer: { telegramUserId: "9002", username: "luma_customer" },
+        }),
+      }),
+      transport,
+      now: () => "2026-08-14T08:00:00.000Z",
+    });
+    const inbound = await app.ingest({
+      botAlias: "gateway",
+      receivedAt: "2026-08-14T08:00:00.000Z",
+      payload: telegramUpdate(20_010, 30_010, "Keep the internal reply chain."),
+    });
+    const chat = await repositories.chats.findByTelegramId(groupId);
+    expect(chat).not.toBeNull();
+
+    const product = await app.projectAgentMessage({
+      threadId: inbound.threadId as string,
+      chatId: chat!.id,
+      agentId: "agent-product",
+      contentText: "The product perspective.",
+      idempotencyKey: "cross-persona-product-20010",
+    });
+    const customer = await app.projectAgentMessage({
+      threadId: inbound.threadId as string,
+      chatId: chat!.id,
+      agentId: "agent-customer",
+      contentText: "The customer perspective builds on it.",
+      replyToMessageId: product.messageId,
+      idempotencyKey: "cross-persona-customer-20010",
+    });
+
+    expect(customer.status).toBe("sent");
+    expect(transport.calls).toHaveLength(2);
+    expect(transport.calls[1]?.replyToTelegramMessageId).toBeUndefined();
+    const canonical = await repositories.messages.getById(customer.messageId);
+    expect(canonical.replyToMessageId).toBe(product.messageId);
+    const outbound = await repositories.telegramOutbound.getByIdempotencyKey("cross-persona-customer-20010");
+    const parts = await repositories.telegramOutbound.listParts(outbound.id);
+    expect(parts[0]?.replyToTelegramMessageId).toBeNull();
+  });
+
   it("keeps canonical output when Telegram fails and records bounded retry data", async () => {
     const transport = new FakeTelegramTransport();
     transport.failure = new TelegramTransportError("rate_limited", "rate limited by Telegram", {
