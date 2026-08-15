@@ -12,6 +12,7 @@ import { InvalidTransitionError, NotFoundError } from "../database/errors";
 import { FOUNDATION_GUARDRAILS } from "../guardrails";
 import {
   AgentActionValidationError,
+  AGENT_ACTION_SCHEMA,
   parseAgentAction,
   type AgentAction,
 } from "./actions";
@@ -478,7 +479,7 @@ export class AgentRuntimeService {
         systemPrompt: prompt.systemPrompt,
         messages: prompt.messages,
         temperature: 0.2,
-        maxOutputTokens: 256,
+        maxOutputTokens: 384,
         timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
         metadata: { agentId: agent.id, threadId: thread.id },
       });
@@ -518,7 +519,13 @@ export class AgentRuntimeService {
       try {
         const repaired = await this.dependencies.provider.generate({
           modelKey: this.dependencies.modelKey,
-          systemPrompt: "Return only valid JSON matching the supplied LUMA action schema. Do not add prose or hidden reasoning.",
+          systemPrompt: [
+            "Return exactly one complete JSON object matching this LUMA action schema.",
+            AGENT_ACTION_SCHEMA,
+            "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
+            "Keep content under 400 Unicode characters and reason_summary under 160 characters.",
+            "Do not add prose, Markdown fences, or hidden reasoning.",
+          ].join("\n"),
           messages: [{
             role: "user",
             content: JSON.stringify({
@@ -528,7 +535,7 @@ export class AgentRuntimeService {
             }),
           }],
           temperature: 0,
-          maxOutputTokens: 256,
+          maxOutputTokens: 384,
           timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
           metadata: { repair: "true", agentId: agent.id, threadId: thread.id },
         });
