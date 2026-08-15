@@ -1,6 +1,6 @@
 # D1 migrations
 
-Phase 00 creates only the foundation metadata table. Phase 01 adds the durable domain schema for agents, messages, threads, files, jobs, evaluations, and governance records. Phase 02 adds the normalized child records needed when one canonical message is projected into multiple Telegram messages.
+Phase 00 creates only the foundation metadata table. Phase 01 adds the durable domain schema for agents, messages, threads, files, jobs, evaluations, and governance records. Phase 02 adds the normalized child records needed when one canonical message is projected into multiple Telegram messages. Phase 04 adds D1-backed logical Markdown workspaces, immutable document history, bounded thread summaries, official knowledge-source caching, and FTS5 retrieval.
 
 Apply locally with:
 

@@ -4,6 +4,8 @@ import { NebulaProvider, DEFAULT_NEBULA_MODEL, VERIFIED_NEBULA_BASE_URL, type LL
 import { createTelegramApplication, TelegramBotApiTransport, parseTelegramConfig } from "../telegram";
 import { AgentRuntimeService, type AgentRuntimeDependencies } from "./runtime";
 import { AgentScheduler, type AgentJobQueue } from "./scheduler";
+import { createMemoryServices } from "../memory";
+import { KnowledgeScheduler } from "../knowledge/scheduler";
 
 export interface AgentRuntimeEnvironment {
   readonly DB: D1Database;
@@ -36,6 +38,7 @@ export function createAgentRuntime(
     baseUrl: env.NEBULA_BASE_URL || VERIFIED_NEBULA_BASE_URL,
     model: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL,
   });
+  const memory = createMemoryServices(repositories, { provider, modelKey: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL });
   const telegramConfig = parseTelegramConfig(env);
   const telegram = createTelegramApplication({
     repositories,
@@ -49,6 +52,7 @@ export function createAgentRuntime(
     provider,
     telegram,
     modelKey: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL,
+    memory,
     now: options?.now,
     rng: options?.rng,
   };
@@ -65,4 +69,11 @@ export function createAgentScheduler(
     now: options?.now,
     rng: options?.rng,
   });
+}
+
+export function createKnowledgeScheduler(
+  env: AgentRuntimeEnvironment & { readonly AGENT_JOBS: AgentJobQueue },
+  options?: { readonly now?: () => string },
+): KnowledgeScheduler {
+  return new KnowledgeScheduler(createRepositories(env.DB), env.AGENT_JOBS, options?.now);
 }

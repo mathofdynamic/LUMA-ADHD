@@ -5,7 +5,7 @@ import type {
   ScheduledController,
 } from "@cloudflare/workers-types";
 
-import { createAgentScheduler } from "./agents/factory";
+import { createAgentScheduler, createKnowledgeScheduler } from "./agents/factory";
 import { routeApi } from "./api/router";
 import { consumeAgentJobs, type AgentJobMessage } from "./jobs";
 import { handleTelegramWebhook } from "./telegram/webhook";
@@ -15,7 +15,7 @@ function logScheduleTick(controller: ScheduledController): void {
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "03-agent-runtime",
+      phase: "04-memory-files-knowledge",
     }),
   );
 }
@@ -43,12 +43,15 @@ const handler = {
     logScheduleTick(controller);
     try {
       const result = await createAgentScheduler(env).tick();
+      const knowledge = await createKnowledgeScheduler(env).tick();
       console.log(JSON.stringify({
         event: "agent_scheduler_tick_completed",
         dueSchedule: result.dueSchedule,
         ambientJobsCreated: result.ambientJobsCreated,
         dueJobsEnqueued: result.dueJobsEnqueued,
         inactivityRecovery: result.inactivityRecovery,
+        knowledgeSyncJobsCreated: knowledge.jobsCreated,
+        knowledgeSourcesConfigured: knowledge.sourcesInitialized,
       }));
     } catch {
       console.warn(JSON.stringify({ event: "agent_scheduler_tick_failed" }));

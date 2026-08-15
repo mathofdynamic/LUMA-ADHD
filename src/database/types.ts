@@ -185,6 +185,8 @@ export interface DocumentRecord {
   readonly threadId: ThreadId | null;
   readonly title: string;
   readonly slug: string | null;
+  readonly logicalPath: string;
+  readonly tags: readonly string[];
   readonly documentType: string;
   readonly currentVersion: number;
   readonly metadata: JsonObject;
@@ -197,6 +199,7 @@ export interface DocumentVersionRecord {
   readonly id: string;
   readonly documentId: DocumentId;
   readonly versionNumber: number;
+  readonly parentVersionId: string | null;
   readonly contentMarkdown: string;
   readonly changeSummary: string | null;
   readonly checksum: string | null;
@@ -331,6 +334,8 @@ export interface CreateDocumentInput {
   readonly threadId?: ThreadId;
   readonly title: string;
   readonly slug?: string;
+  readonly logicalPath?: string;
+  readonly tags?: readonly string[];
   readonly documentType?: string;
   readonly initialContent?: string;
   readonly changeSummary?: string;
@@ -342,10 +347,32 @@ export interface CreateDocumentInput {
 export interface AppendDocumentRevisionInput {
   readonly documentId: DocumentId;
   readonly contentMarkdown: string;
+  readonly parentVersionId?: string;
   readonly changeSummary?: string;
   readonly checksum?: string;
   readonly createdByAgentId?: AgentId;
   readonly createdByUserId?: UserId;
+}
+
+export interface DocumentReferenceRecord {
+  readonly id: string;
+  readonly documentId: DocumentId;
+  readonly threadId: ThreadId | null;
+  readonly messageId: MessageId | null;
+  readonly referencedByAgentId: AgentId | null;
+  readonly relation: string;
+  readonly metadata: JsonObject;
+  readonly idempotencyKey: string;
+  readonly createdAt: string;
+}
+
+export interface DocumentShareRecord {
+  readonly id: string;
+  readonly documentId: DocumentId;
+  readonly agentId: AgentId;
+  readonly grantedByAgentId: AgentId | null;
+  readonly createdAt: string;
+  readonly revokedAt: string | null;
 }
 
 export interface CreateEventInput {
