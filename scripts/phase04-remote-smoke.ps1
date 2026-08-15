@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-  [string]$Query = 'luma pricing growth'
+  [string]$Query = 'luma pricing growth',
+  [ValidateRange(1, 3)]
+  [int]$RetryCount = 3
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,6 +11,7 @@ $configFile = $null
 $http = $null
 $workerName = 'luma-adhd-p04-smoke-' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
 $workerDeployed = $false
+$workerAttempted = $false
 
 function New-SmokeSecret {
   $bytes = [byte[]]::new(32)
@@ -79,8 +82,19 @@ try {
 "@
   [System.IO.File]::WriteAllText($configFile, $config, [System.Text.UTF8Encoding]::new($false))
   $wranglerPath = (Resolve-Path (Join-Path $repoRoot 'node_modules\wrangler\bin\wrangler.js')).Path
-  $deployOutput = & node $wranglerPath deploy --config $configFile --keep-vars 2>&1 | Out-String
-  if ($LASTEXITCODE -ne 0) { throw 'Temporary Worker deployment failed' }
+  $workerAttempted = $true
+  $deployed = $false
+  $deployOutput = ''
+  for ($attempt = 1; $attempt -le $RetryCount; $attempt += 1) {
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $deployOutput = & node $wranglerPath deploy --config $configFile --keep-vars 2>&1 | Out-String
+    $deployExit = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorAction
+    if ($deployExit -eq 0) { $deployed = $true; break }
+    if ($attempt -lt $RetryCount) { Start-Sleep -Seconds 3 }
+  }
+  if (-not $deployed) { throw 'Temporary Worker deployment failed after bounded retries' }
   $workerDeployed = $true
   $baseUrl = [regex]::Match($deployOutput, 'https://[A-Za-z0-9.-]+\.workers\.dev').Value.TrimEnd('/')
   if ([string]::IsNullOrWhiteSpace($baseUrl)) { throw 'Temporary Worker URL was not returned' }
@@ -125,7 +139,7 @@ try {
   foreach ($item in @($context.items)) { Write-Output ('CONTEXT_ITEM=' + [string]$item.type + ':' + [string]$item.title + ':authority=' + [int]$item.authority) }
   Write-Output 'PHASE04_REMOTE_SMOKE_OK=true'
 } finally {
-  if ($workerDeployed) {
+  if ($workerAttempted) {
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $null = & node (Resolve-Path (Join-Path $repoRoot 'node_modules\wrangler\bin\wrangler.js')).Path delete $workerName --config $configFile --force 2>&1 | Out-String

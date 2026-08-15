@@ -81,7 +81,9 @@ export class KnowledgeSyncService {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const response = await this.fetcher(definition.url, { method: "GET", headers, redirect: "error", signal: controller.signal });
+      // Cloudflare Fetch supports follow/manual. Manual keeps redirects from
+      // leaving the exact allowlisted URL; the non-2xx path records the failure.
+      const response = await this.fetcher(definition.url, { method: "GET", headers, redirect: "manual", signal: controller.signal });
       if (response.status === 304) {
         const updated = await this.repositories.knowledgeSources.updateSyncState({
           sourceId: source.id, status: "active", attemptedAt, successfulAt: attemptedAt,

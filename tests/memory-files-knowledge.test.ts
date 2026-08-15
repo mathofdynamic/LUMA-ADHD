@@ -150,12 +150,17 @@ describe("Phase 04 official knowledge synchronization", () => {
   it("updates, skips unchanged content, and preserves the last good cache on failure", async () => {
     const definition = OFFICIAL_LUMA_SOURCES[0]!;
     let body = "# LUMA\n\n## Pricing\n\nقیمت و اشتراک باید با داده واقعی سنجیده شود.";
+    let redirectMode: RequestRedirect | undefined;
     const sync = new KnowledgeSyncService(repositories, {
       now: () => "2026-08-15T12:00:00.000Z",
-      fetcher: async () => new Response(body, { status: 200, headers: { etag: `etag-${body.length}` } }),
+      fetcher: async (_input, init) => {
+        redirectMode = init?.redirect;
+        return new Response(body, { status: 200, headers: { etag: `etag-${body.length}` } });
+      },
     });
     const first = await sync.syncSource(definition.key);
     expect(first.status).toBe("updated");
+    expect(redirectMode).toBe("manual");
     expect(first.chunksCreated).toBeGreaterThan(0);
     const sourceAfterFirst = await repositories.knowledgeSources.getByKey(definition.canonicalKey);
     expect(sourceAfterFirst?.contentHash).toBe(first.contentHash);
