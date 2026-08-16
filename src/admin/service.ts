@@ -439,18 +439,24 @@ export class AdminObservatoryService {
        WHERE ht.deleted_at IS NULL AND (? IS NULL OR ht.status = ?) AND (? IS NULL OR ht.thread_id = ?)
        ORDER BY ht.priority DESC, ht.created_at ASC LIMIT ?`,
     ).bind(status, status, input.threadId ?? null, input.threadId ?? null, limit).all<Row>();
-    return result.results.map((row) => ({
-      id: stringValue(row.id), title: stringValue(row.title), description: stringValue(row.description),
-      status: stringValue(row.status), priority: numberValue(row.priority), dueAt: nullableString(row.due_at),
-      resolution: nullableString(row.resolution), threadId: nullableString(row.thread_id), threadTitle: nullableString(row.thread_title),
-      requesterName: nullableString(row.requester_name), reason: stringValue(row.reason), blocking: booleanValue(row.blocking),
-      targetHumanUserId: nullableString(row.target_human_user_id), requestMessageId: nullableString(row.request_message_id),
-      responseMessageId: nullableString(row.response_message_id), respondedByUserId: nullableString(row.responded_by_user_id),
-      responseSource: stringValue(row.response_source, "none"), resolvedAt: nullableString(row.resolved_at),
-      projectionStatus: stringValue(row.projection_status, "not_requested"), projectionError: nullableString(row.projection_error),
-      telegramMessageId: nullableString(row.telegram_message_id), telegramBotAlias: nullableString(row.telegram_bot_alias),
-      wakeJobId: nullableString(row.wake_job_id), createdAt: stringValue(row.created_at), updatedAt: stringValue(row.updated_at),
-    }));
+    return result.results.map((row) => {
+      const taskStatus = stringValue(row.status);
+      const blocking = booleanValue(row.blocking);
+      const blockingOpen = blocking && !["completed", "rejected", "cancelled"].includes(taskStatus);
+      return {
+        id: stringValue(row.id), title: stringValue(row.title), description: stringValue(row.description),
+        status: taskStatus, priority: numberValue(row.priority), dueAt: nullableString(row.due_at),
+        resolution: nullableString(row.resolution), threadId: nullableString(row.thread_id), threadTitle: nullableString(row.thread_title),
+        requesterName: nullableString(row.requester_name), reason: stringValue(row.reason), blocking: blockingOpen, blockingRequested: blocking, blockingOpen,
+        blockingStatus: blocking ? (blockingOpen ? "blocking" : "resolved") : "non_blocking",
+        targetHumanUserId: nullableString(row.target_human_user_id), requestMessageId: nullableString(row.request_message_id),
+        responseMessageId: nullableString(row.response_message_id), respondedByUserId: nullableString(row.responded_by_user_id),
+        responseSource: stringValue(row.response_source, "none"), resolvedAt: nullableString(row.resolved_at),
+        projectionStatus: stringValue(row.projection_status, "not_requested"), projectionError: nullableString(row.projection_error),
+        telegramMessageId: nullableString(row.telegram_message_id), telegramBotAlias: nullableString(row.telegram_bot_alias),
+        wakeJobId: nullableString(row.wake_job_id), createdAt: stringValue(row.created_at), updatedAt: stringValue(row.updated_at),
+      };
+    });
   }
 
   async listArtifacts(input: { readonly limit?: string | null; readonly includeDeleted?: boolean } = {}): Promise<readonly JsonObject[]> {
