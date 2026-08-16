@@ -168,6 +168,17 @@ export class AgentRepository {
     return result.results.map(mapAgent);
   }
 
+  async updateRank(agentId: string, rank: number, asOf = nowIso()): Promise<AgentRecord> {
+    if (!Number.isFinite(rank) || rank < 0 || rank > 20) {
+      throw new ValidationError("agent.rank must be between 0 and 20");
+    }
+    const result = await this.database.prepare(
+      "UPDATE agents SET rank = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+    ).bind(rank, asOf, agentId).run();
+    if (result.meta.changes !== 1) throw new NotFoundError("agent", agentId);
+    return this.getById(agentId);
+  }
+
   async listSpecialties(agentId: string): Promise<readonly AgentSpecialtyRecord[]> {
     const result = await this.database
       .prepare(

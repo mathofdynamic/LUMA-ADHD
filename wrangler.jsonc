@@ -15,14 +15,16 @@
   // intentionally absent; use .dev.vars locally and Wrangler secrets later.
   "vars": {
     "LUMA_ENVIRONMENT": "local",
-    "LUMA_PHASE": "04-memory-files-knowledge",
+    "LUMA_PHASE": "05-reputation-and-god",
     "TELEGRAM_GROUP_ID": "",
     "TELEGRAM_ADMIN_USER_IDS": "",
     "TELEGRAM_BOT_IDENTITIES_JSON": "{}",
     "NEBULA_BASE_URL": "https://nebula-free-llm.nebula-ai-company.workers.dev/v1",
     "NEBULA_MODEL": "auto",
-    "GOD_BASE_URL": "",
-    "GOD_MODEL": ""
+    "GOD_PROVIDER": "openai",
+    "GOD_BASE_URL": "https://api.openai.com/v1",
+    "GOD_MODEL": "gpt-5.6-sol",
+    "GOD_REASONING_EFFORT": "high"
   },
 
   "d1_databases": [

@@ -5,7 +5,8 @@ import type {
   MessageRecord,
   ThreadRecord,
 } from "../database/types";
-import { AGENT_ACTION_SCHEMA, actionExample } from "./actions";
+import { AGENT_STEP_SCHEMA, actionExample } from "./actions";
+import type { ContextPackTelemetry } from "../memory/types";
 import type { LLMMessage } from "../llm";
 
 export interface PromptParticipant {
@@ -25,10 +26,12 @@ export interface AgentPromptContext {
   readonly requestedAgentIds?: readonly string[];
   readonly participants?: readonly PromptParticipant[];
   readonly humanDisplayName?: string | null;
-  readonly reputationContext?: Readonly<Record<string, number>>;
+  readonly reputationContext?: Readonly<Record<string, string | number>>;
   readonly memoryContext?: readonly string[];
   readonly fileContext?: readonly string[];
   readonly retrievedContext?: string;
+  readonly retrievalTelemetry?: ContextPackTelemetry;
+  readonly acquisitionContext?: readonly string[];
 }
 
 export interface BuiltAgentPrompt {
@@ -101,7 +104,7 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
   const interests = context.interests.map((item) => item.interest);
   const reputation = context.reputationContext
     ? JSON.stringify(context.reputationContext)
-    : "No reputation signal is available in Phase 03.";
+    : "No coarse reputation signal is available.";
   const memory = compactList(context.memoryContext ?? [], 4);
   const files = compactList(context.fileContext ?? [], 4);
   const participantText = participants
@@ -112,7 +115,7 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     : undefined;
 
   const systemPrompt = [
-    "You are one normal LUMA ADHD agent. Return exactly one validated JSON action and no prose outside JSON.",
+    "You are one normal LUMA ADHD agent. Return exactly one validated JSON step (a bounded acquisition request or a final action) and no prose outside JSON.",
     ORGANIZATION_CONSTITUTION,
     `Active response language: ${language}. Keep internal JSON field names in English; write human-facing content in the discussion language.`,
     "\nAGENT IDENTITY",
@@ -138,15 +141,22 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     `relevant_reputation_context: ${reputation}`,
     `relevant_memory_context: ${memory}`,
     `relevant_file_context: ${files}`,
+    `persistent_workspace: /agents/${context.agent.slug}/ (private by default); /shared/ (organizational); explicitly shared documents are accessible through validated application operations.`,
+    "memory_capability: Automatic bounded retrieval runs before every meaningful turn. You can request a bounded search/read acquisition when the supplied context is insufficient. Search before creating durable work when practical.",
+    "grounding_policy: Use supplied authoritative LUMA knowledge for current company/product facts. Official LUMA material outranks generic model memory, unsupported assumptions, and stale casual discussion. Distinguish CURRENT OFFICIAL FACT from PROPOSED CHANGE or OPINION. If stored evidence is insufficient, state uncertainty or acquire more information; do not invent LUMA facts.",
+    "grounding_execution: When the retrieval telemetry includes official LUMA knowledge for a factual company/product question, base factual claims on those excerpts. Do not replace them with a generic definition. If the excerpts do not support a claim, qualify it or acquire more information.",
+    `retrieval_telemetry: ${context.retrievalTelemetry ? JSON.stringify(context.retrievalTelemetry) : "none"}`,
     `bounded_retrieval_context:\n${context.retrievedContext ?? "none"}`,
+    `bounded_acquisition_results:\n${context.acquisitionContext?.join("\n\n") || "none"}`,
     "\nAVAILABLE ACTIONS",
     "SPEAK publishes a useful message through your mapped persona. WAIT remains internal and is invisible in Telegram.",
     "REQUEST_AGENT records an internal request for another agent; it never sends a Telegram bot-to-bot message.",
     "REQUEST_HUMAN creates a bounded human task. PROPOSE_THREAD and REOPEN_THREAD use durable thread state.",
-    "FILE_WORK executes one validated application-level document operation per turn (create_document, read_document, edit_document, search_documents, reference_document, or share_document). It never grants SQL or filesystem access. DRAW remains deferred to Phase 07. VOTE records a structured foundation only.",
+    "FILE_WORK executes one validated application-level document operation per turn (create_document, read_document, edit_document, search_documents, delete_document, restore_document, document_history, read_document_version, reference_document, share_document, or list_documents). Delete is reversible soft delete. It never grants SQL or filesystem access. DRAW remains deferred to Phase 07. VOTE records a structured foundation only.",
+    "For deeper information use at most a small bounded number of ACQUIRE steps: SEARCH_MEMORY, SEARCH_DOCUMENTS, READ_DOCUMENT, READ_DOCUMENT_VERSION, or LIST_RELEVANT_FILES. Acquisition is not a public answer and must be followed by a final action when enough information is available.",
     "\nTELEGRAM COMMUNICATION STYLE",
     TELEGRAM_PRESENTATION_GUIDANCE,
-    `\nOUTPUT SCHEMA\n${AGENT_ACTION_SCHEMA}`,
+    `\nOUTPUT SCHEMA\n${AGENT_STEP_SCHEMA}`,
     `Valid example:\n${actionExample()}`,
     "Keep content concise (at most 4096 Unicode characters is a safety ceiling, not a target) and reason_summary concise (at most 160 characters).",
     "Use literal UTF-8 Persian or English text in string values. Do not emit \\uXXXX escapes.",

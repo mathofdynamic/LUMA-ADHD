@@ -18,8 +18,7 @@ type TelegramSecretName =
   | "TELEGRAM_FINANCE_BOT_TOKEN"
   | "TELEGRAM_CUSTOMER_BOT_TOKEN"
   | "TELEGRAM_OPERATIONS_BOT_TOKEN"
-  | "TELEGRAM_HERETIC_BOT_TOKEN"
-  | "TELEGRAM_GOD_BOT_TOKEN";
+  | "TELEGRAM_HERETIC_BOT_TOKEN";
 
 export type TelegramRuntimeEnv = {
   readonly DB: D1Database;

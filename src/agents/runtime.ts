@@ -12,10 +12,14 @@ import { InvalidTransitionError, NotFoundError } from "../database/errors";
 import { FOUNDATION_GUARDRAILS } from "../guardrails";
 import {
   AgentActionValidationError,
-  AGENT_ACTION_SCHEMA,
-  parseAgentAction,
+  AgentAcquisitionValidationError,
+  AGENT_STEP_SCHEMA,
+  parseAgentStep,
   type AgentAction,
+  type AgentAcquisitionRequest,
+  type AgentStep,
 } from "./actions";
+import { AgentDocumentTools } from "./memory-tools";
 import { buildAgentPrompt, TELEGRAM_PRESENTATION_GUIDANCE } from "./prompts";
 import {
   scoreCandidates,
@@ -31,6 +35,8 @@ import {
 import type { TelegramApplicationService } from "../telegram";
 import { ContextPackService } from "../memory/retrieval";
 import type { MemoryServices } from "../memory";
+import type { ReputationService } from "../reputation/service";
+import { assessOfficialGrounding, type OfficialGroundingAssessment } from "./grounding";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
@@ -40,6 +46,7 @@ export interface AgentRuntimeDependencies {
   readonly telegram?: Pick<TelegramApplicationService, "projectAgentMessage">;
   readonly modelKey: string;
   readonly memory?: MemoryServices;
+  readonly reputation?: ReputationService;
   readonly now?: () => string;
   readonly rng?: () => number;
 }
@@ -110,7 +117,13 @@ function isRetryableProviderError(error: unknown): boolean {
   return error instanceof LLMProviderError ? error.failure.retryable : true;
 }
 
-function actionMetadata(action: AgentAction, repairAttempts: number): JsonObject {
+function actionMetadata(
+  action: AgentAction,
+  repairAttempts: number,
+  retrievalTelemetry?: JsonObject,
+  acquisitionOperations = 0,
+  grounding?: OfficialGroundingAssessment,
+): JsonObject {
   return {
     intent: action.intent,
     confidence: action.confidence,
@@ -118,7 +131,26 @@ function actionMetadata(action: AgentAction, repairAttempts: number): JsonObject
     targetAgentId: action.targetAgentId,
     targetThreadId: action.targetThreadId,
     repairAttempts,
+    retrieval: retrievalTelemetry ? { ...retrievalTelemetry, acquisitionOperations } : {},
+    acquisitionOperations,
+    grounding: grounding ? {
+      required: grounding.required,
+      satisfied: grounding.satisfied,
+      sourceIds: grounding.sourceIds,
+      matchedTerms: grounding.matchedTerms,
+      bestSourceMatchCount: grounding.bestSourceMatchCount,
+    } : {},
     actionMetadata: action.metadata,
+  };
+}
+
+function groundingMetadata(grounding: OfficialGroundingAssessment): JsonObject {
+  return {
+    required: grounding.required,
+    satisfied: grounding.satisfied,
+    sourceIds: grounding.sourceIds,
+    matchedTerms: grounding.matchedTerms,
+    bestSourceMatchCount: grounding.bestSourceMatchCount,
   };
 }
 
@@ -289,9 +321,12 @@ export class AgentRuntimeService {
         addressedAgentId: input.addressedAgentId,
         requestedAgentIds: requested,
         recentAgentIds,
-        reputationByAgentId: Object.fromEntries(
-          profiles.map((profile) => [profile.agent.id, (profile.agent.rank - 10) / 10]),
-        ),
+        reputationByAgentId: {
+          ...Object.fromEntries(profiles.map((profile) => [profile.agent.id, (profile.agent.rank - 10) / 10])),
+          ...(this.dependencies.reputation
+            ? await this.dependencies.reputation.selectionSignals(profiles.map((profile) => profile.agent.id))
+            : {}),
+        },
         turnIndex: turnCount,
         rng: this.rng,
       });
@@ -477,17 +512,41 @@ export class AgentRuntimeService {
     const human = context.wakeMessage?.authorUserId
       ? await this.dependencies.repositories.users.getById(context.wakeMessage.authorUserId).catch(() => null)
       : null;
-    const contextPack = this.dependencies.memory
-      ? await this.dependencies.memory.context.build({
-        query: context.wakeMessage?.contentText ?? thread.summary ?? thread.title,
+    const query = context.wakeMessage?.contentText ?? thread.summary ?? thread.title;
+    const contextPack = await (this.dependencies.memory
+      ? this.dependencies.memory.context.build({
+        query,
         actor: { agentId: agent.id },
         threadId: thread.id,
         recentMessages: context.recentMessages,
         topK: 8,
         maxCharacters: 6_000,
       })
-      : null;
-    const prompt = buildAgentPrompt({
+      : new ContextPackService(this.dependencies.repositories.database).build({
+        query,
+        actor: { agentId: agent.id },
+        threadId: thread.id,
+        recentMessages: context.recentMessages,
+        topK: 8,
+        maxCharacters: 6_000,
+      }));
+    const retrievalTelemetry: JsonObject = {
+      ...contextPack.telemetry,
+      sourceTypeCounts: { ...contextPack.telemetry.sourceTypeCounts },
+      selectedSources: contextPack.telemetry.selectedSources
+        ? contextPack.telemetry.selectedSources.map((source) => ({ ...source }))
+        : [],
+    };
+    const participants = [
+      ...context.profiles.map((profile) => ({
+        id: profile.agent.id,
+        displayName: profile.agent.displayName,
+        kind: "agent" as const,
+      })),
+      ...(human ? [{ id: human.id, displayName: human.displayName, kind: "human" as const }] : []),
+    ];
+    let acquisitionContext: string[] = [];
+    const buildPrompt = () => buildAgentPrompt({
       agent,
       specialties,
       interests,
@@ -496,76 +555,61 @@ export class AgentRuntimeService {
       recentMessages: context.recentMessages,
       addressedAgentId: context.addressedAgentId,
       requestedAgentIds: context.requestedAgentIds,
-      participants: [
-        ...context.profiles.map((profile) => ({
-          id: profile.agent.id,
-          displayName: profile.agent.displayName,
-          kind: "agent" as const,
-        })),
-        ...(human ? [{ id: human.id, displayName: human.displayName, kind: "human" as const }] : []),
-      ],
+      participants,
       humanDisplayName: human?.displayName,
-      reputationContext: { globalRank: agent.rank },
-      retrievedContext: contextPack ? ContextPackService.toPromptText(contextPack) : undefined,
+      reputationContext: {
+        trackRecord: agent.rank >= 12 ? "strong relevant track record" : agent.rank <= 8 ? "recent evidence concern" : "limited or neutral evidence",
+      },
+      retrievalTelemetry: { ...contextPack.telemetry, acquisitionOperations: acquisitionContext.length },
+      retrievedContext: ContextPackService.toPromptText(contextPack),
+      acquisitionContext,
     });
 
+    let prompt = buildPrompt();
     let response: LLMGenerateResponse;
     let repairAttempts = 0;
-    const usageKey = `provider-usage:${turn.id}:initial`;
-    const startedAt = Date.now();
-    try {
-      response = await this.dependencies.provider.generate({
-        modelKey: this.dependencies.modelKey,
-        systemPrompt: prompt.systemPrompt,
-        messages: prompt.messages,
-        temperature: 0,
-        maxOutputTokens: 512,
-        timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
-        metadata: { agentId: agent.id, threadId: thread.id },
-      });
-      await this.recordUsage(usageKey, context.job, turn, response, undefined, Date.now() - startedAt);
-    } catch (error: unknown) {
-      const normalized = normalizeProviderError(error);
-      await this.recordUsage(
-        usageKey,
-        context.job,
-        turn,
-        undefined,
-        normalized,
-        Date.now() - startedAt,
-      );
-      await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
-        mode: context.wakeReason,
-        providerFailure: safeErrorSummary(normalized),
-      });
-      return {
-        action: null,
-        outputMessageId: undefined,
-        wait: false,
-        retryableFailure: normalized.failure.retryable,
-        stopBurst: true,
-      };
-    }
-
-    let action: AgentAction;
-    try {
-      action = parseAgentAction(response.text);
-    } catch (error: unknown) {
-      if (!(error instanceof AgentActionValidationError)) {
-        throw error;
-      }
-      repairAttempts = 1;
-      const repairStartedAt = Date.now();
+    let acquisitionOperations = 0;
+    const callProvider = async (
+      systemPrompt: string,
+      messages: readonly { readonly role: "user" | "assistant"; readonly content: string }[],
+      usageSuffix: string,
+      maxOutputTokens: number,
+      metadata: JsonObject,
+    ): Promise<LLMGenerateResponse> => {
+      const startedAt = Date.now();
       try {
+        const generated = await this.dependencies.provider.generate({
+          modelKey: this.dependencies.modelKey,
+          systemPrompt,
+          messages,
+          temperature: 0,
+          maxOutputTokens,
+          timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
+          metadata: Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])),
+        });
+        await this.recordUsage(`provider-usage:${turn.id}:${usageSuffix}`, context.job, turn, generated, undefined, Date.now() - startedAt);
+        return generated;
+      } catch (error: unknown) {
+        const normalized = normalizeProviderError(error);
+        await this.recordUsage(`provider-usage:${turn.id}:${usageSuffix}`, context.job, turn, undefined, normalized, Date.now() - startedAt);
+        throw normalized;
+      }
+    };
+    const parseWithRepair = async (candidate: LLMGenerateResponse): Promise<{ readonly step: AgentStep; readonly response: LLMGenerateResponse }> => {
+      try {
+        return { step: parseAgentStep(candidate.text), response: candidate };
+      } catch (error: unknown) {
+        if (!(error instanceof AgentActionValidationError) && !(error instanceof AgentAcquisitionValidationError)) throw error;
+        if (repairAttempts >= 1) throw error;
+        repairAttempts = 1;
         const recentContext = context.recentMessages
           .slice(-4)
           .map((message) => `${message.authorType}:${message.contentText}`)
           .join("\n")
           .slice(0, 3_000);
-        const repaired = await this.dependencies.provider.generate({
-          modelKey: this.dependencies.modelKey,
-          systemPrompt: [
-            "You are repairing one LUMA ADHD agent action. Return only one complete JSON object.",
+        const repaired = await callProvider(
+          [
+            "You are repairing one LUMA ADHD agent step. Return only one complete JSON object.",
             `agent_id: ${agent.id}`,
             `agent_name: ${agent.displayName}`,
             `agent_specialty: ${agent.specialty}`,
@@ -576,66 +620,146 @@ export class AgentRuntimeService {
             `known_participants: ${context.profiles.map((profile) => `${profile.agent.id}=${profile.agent.displayName}`).join(", ") || "none"}`,
             `recent_context:\n${recentContext || "none"}`,
             TELEGRAM_PRESENTATION_GUIDANCE,
-            AGENT_ACTION_SCHEMA,
+            AGENT_STEP_SCHEMA,
             "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
             "Keep content under 4096 Unicode characters and reason_summary under 160 characters. Use null targets unless the intent requires one.",
             "Do not add prose, Markdown fences, or hidden reasoning. Reply in the language of recent_context.",
           ].join("\n"),
-          messages: [{
+          [{
             role: "user",
             content: JSON.stringify({
-              invalid_response: response.text.slice(0, 4_000),
+              invalid_response: candidate.text.slice(0, 4_000),
               validation_errors: error.problems,
-              instruction: "Return the corrected action now.",
+              instruction: "Return the corrected step now.",
             }),
           }],
-          temperature: 0,
-          maxOutputTokens: 256,
-          timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
-          metadata: { repair: "true", agentId: agent.id, threadId: thread.id },
-        });
-        await this.recordUsage(
-          `provider-usage:${turn.id}:repair`,
-          context.job,
-          turn,
-          repaired,
-          undefined,
-          Date.now() - repairStartedAt,
+          "repair",
+          256,
+          { repair: "true", agentId: agent.id, threadId: thread.id },
         );
-        action = parseAgentAction(repaired.text);
-        response = repaired;
-      } catch (repairError: unknown) {
-        if (repairError instanceof LLMProviderError) {
-          await this.recordUsage(
-            `provider-usage:${turn.id}:repair`,
-            context.job,
-            turn,
-            undefined,
-            repairError,
-            Date.now() - repairStartedAt,
-          );
-        }
-        const summary = repairError instanceof AgentActionValidationError
-          ? repairError.problems
-          : [safeErrorSummary(repairError)];
-        await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
-          intent: "INVALID",
-          repairAttempts,
-          validationErrors: summary.slice(0, 5),
-        });
-        await this.dependencies.repositories.events.append({
-          eventType: "runtime.action_validation_failed",
-          aggregateType: "agent_turn",
-          aggregateId: turn.id,
-          threadId: thread.id,
-          jobId: context.job.id,
-          actor: { type: "agent", agentId: agent.id },
-          idempotencyKey: `runtime-action-validation-failed:${turn.id}`,
-          payload: { repairAttempts, validationErrors: summary.slice(0, 5) },
-        });
-        return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true };
+        return { step: parseAgentStep(repaired.text), response: repaired };
       }
+    };
+
+    let step: AgentStep;
+    let grounding: OfficialGroundingAssessment = {
+      required: false,
+      satisfied: true,
+      sourceIds: [],
+      matchedTerms: [],
+      bestSourceMatchCount: 0,
+    };
+    try {
+      response = await callProvider(
+        prompt.systemPrompt,
+        prompt.messages,
+        "initial",
+        512,
+        { agentId: agent.id, threadId: thread.id, retrieval: retrievalTelemetry },
+      );
+      ({ step, response } = await parseWithRepair(response));
+      while (step.kind === "acquisition") {
+        if (acquisitionOperations >= 3) {
+          acquisitionContext = [...acquisitionContext, "The bounded acquisition limit has been reached. Return a final action using only the information already available."];
+          prompt = buildPrompt();
+          response = await callProvider(
+            prompt.systemPrompt,
+            prompt.messages,
+            "acquisition-final",
+            512,
+            { agentId: agent.id, threadId: thread.id, acquisitionLimitReached: true },
+          );
+          ({ step, response } = await parseWithRepair(response));
+          if (step.kind === "acquisition") throw new AgentAcquisitionValidationError(["acquisition limit reached; a final action is required"]);
+          break;
+        }
+        const acquisition = await this.executeAcquisition(context, step.request, acquisitionOperations + 1);
+        acquisitionOperations += 1;
+        acquisitionContext = [...acquisitionContext, acquisition.promptText];
+        prompt = buildPrompt();
+        response = await callProvider(
+          prompt.systemPrompt,
+          prompt.messages,
+          `acquisition-${acquisitionOperations}`,
+          512,
+          { agentId: agent.id, threadId: thread.id, acquisitionOperation: step.request.operation, acquisitionNumber: acquisitionOperations },
+        );
+        ({ step, response } = await parseWithRepair(response));
+      }
+      if (step.kind !== "action") throw new AgentAcquisitionValidationError(["a final action is required after acquisition"]);
+      if (step.action.intent === "SPEAK") {
+        grounding = assessOfficialGrounding(step.action.content ?? "", contextPack);
+        if (grounding.required && !grounding.satisfied) {
+          if (repairAttempts >= 1) {
+            throw new AgentActionValidationError(["SPEAK did not contain enough distinctive material from retrieved official LUMA knowledge"]);
+          }
+          repairAttempts = 1;
+          const repaired = await callProvider(
+            [
+              "You are repairing one LUMA ADHD answer that failed the official-source grounding check.",
+              "Return exactly one final SPEAK action as JSON. Do not return an acquisition step.",
+              "Use only claims supported by the retrieved official_luma_knowledge excerpts below.",
+              "If the excerpts do not establish a requested fact, state that the current official context is insufficient instead of using generic model memory.",
+              `retrieved_official_sources: ${grounding.sourceIds.join(", ") || "none"}`,
+              `retrieved_context:\n${ContextPackService.toPromptText(contextPack)}`,
+              `grounding_validation: matched_terms=${grounding.matchedTerms.join(", ") || "none"}; best_source_match_count=${grounding.bestSourceMatchCount}`,
+              TELEGRAM_PRESENTATION_GUIDANCE,
+              AGENT_STEP_SCHEMA,
+              "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
+              "Do not include citations or source IDs in the visible message unless naturally useful; provenance is retained internally.",
+              "Do not add prose, Markdown fences, or hidden reasoning.",
+            ].join("\n"),
+            [{ role: "user", content: "Return the grounded final SPEAK action now." }],
+            "grounding-repair",
+            512,
+            { repair: "grounding", agentId: agent.id, threadId: thread.id },
+          );
+          ({ step, response } = await parseWithRepair(repaired));
+          if (step.kind !== "action" || step.action.intent !== "SPEAK") {
+            throw new AgentActionValidationError(["grounding repair must return a final SPEAK action"]);
+          }
+          grounding = assessOfficialGrounding(step.action.content ?? "", contextPack);
+          if (grounding.required && !grounding.satisfied) {
+            throw new AgentActionValidationError(["grounding repair still did not use retrieved official LUMA knowledge"]);
+          }
+        }
+      }
+    } catch (error: unknown) {
+      if (error instanceof LLMProviderError) {
+        await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
+          mode: context.wakeReason,
+          providerFailure: safeErrorSummary(error),
+          retrieval: retrievalTelemetry,
+          grounding: groundingMetadata(grounding),
+          acquisitionOperations,
+        });
+        return { action: null, outputMessageId: undefined, wait: false, retryableFailure: error.failure.retryable, stopBurst: true };
+      }
+      const summary = error instanceof AgentActionValidationError || error instanceof AgentAcquisitionValidationError
+        ? error.problems
+        : [safeErrorSummary(error)];
+      await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
+        intent: "INVALID",
+        repairAttempts,
+        validationErrors: summary.slice(0, 5),
+        retrieval: retrievalTelemetry,
+        grounding: groundingMetadata(grounding),
+        acquisitionOperations,
+      });
+      await this.dependencies.repositories.events.append({
+        eventType: "runtime.action_validation_failed",
+        aggregateType: "agent_turn",
+        aggregateId: turn.id,
+        threadId: thread.id,
+        jobId: context.job.id,
+        actor: { type: "agent", agentId: agent.id },
+        idempotencyKey: `runtime-action-validation-failed:${turn.id}`,
+        payload: { repairAttempts, validationErrors: summary.slice(0, 5), acquisitionOperations },
+      });
+      return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true };
     }
+
+    const action = step.action;
 
     let outputMessageId: string | undefined;
     let deliveryStatus: string | undefined;
@@ -645,7 +769,7 @@ export class AgentRuntimeService {
       deliveryStatus = execution.deliveryStatus;
     } catch (error: unknown) {
       await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
-        ...actionMetadata(action, repairAttempts),
+        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding),
         executionFailure: safeErrorSummary(error),
       });
       await this.dependencies.repositories.events.append({
@@ -666,7 +790,7 @@ export class AgentRuntimeService {
       "completed",
       outputMessageId,
       {
-        ...actionMetadata(action, repairAttempts),
+        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding),
         provider: response.provider,
         model: response.model,
         requestId: response.requestId ?? null,
@@ -693,6 +817,57 @@ export class AgentRuntimeService {
       retryableFailure: false,
       stopBurst: false,
     };
+  }
+
+  private async executeAcquisition(
+    context: TurnContext,
+    request: AgentAcquisitionRequest,
+    sequence: number,
+  ): Promise<{ readonly promptText: string }> {
+    const operationLabel = `${request.operation} #${sequence}`;
+    if (!this.dependencies.memory) {
+      return { promptText: `[${operationLabel}] No memory service is available in this execution environment.` };
+    }
+    try {
+      if (request.operation === "SEARCH_MEMORY") {
+        const pack = await this.dependencies.memory.context.build({
+          query: request.query ?? "",
+          actor: { agentId: context.agent.id },
+          threadId: context.thread.id,
+          recentMessages: context.recentMessages,
+          topK: request.limit,
+          maxCharacters: 3_500,
+        });
+        return {
+          promptText: `[${operationLabel}] Bounded memory search result. Official LUMA material is authoritative when present.\n${ContextPackService.toPromptText(pack)}`,
+        };
+      }
+
+      const tools = new AgentDocumentTools(this.dependencies.memory);
+      const documentOperation = request.operation === "SEARCH_DOCUMENTS"
+        ? "search_documents"
+        : request.operation === "READ_DOCUMENT"
+          ? "read_document"
+          : request.operation === "READ_DOCUMENT_VERSION"
+            ? "read_document_version"
+            : "list_documents";
+      const result = await tools.execute({
+        operation: documentOperation,
+        actor: { agentId: context.agent.id },
+        logicalPath: request.logicalPath ?? undefined,
+        query: request.query ?? undefined,
+        versionNumber: request.versionNumber ?? undefined,
+        threadId: context.thread.id,
+        idempotencyKey: `agent-acquisition:${context.turn.id}:${sequence}`,
+      });
+      return {
+        promptText: `[${operationLabel}] Validated document operation result:\n${JSON.stringify(result)}`,
+      };
+    } catch (error: unknown) {
+      return {
+        promptText: `[${operationLabel}] The validated information request failed safely: ${String(error).slice(0, 300)}`,
+      };
+    }
   }
 
   private async executeAction(
@@ -870,58 +1045,25 @@ export class AgentRuntimeService {
         const logicalPath = stringField(work, "path") ?? stringField(work, "logicalPath")
           ?? stringField(action.metadata, "path") ?? stringField(action.metadata, "logicalPath");
         if (!operation) throw new InvalidTransitionError("FILE_WORK", "missing_operation");
-        if (["create_document", "read_document", "edit_document", "reference_document", "share_document"].includes(operation) && !logicalPath) {
-          throw new InvalidTransitionError("FILE_WORK", "missing_path");
-        }
-        const actor = { agentId: context.agent.id };
-        let result: JsonObject;
-        switch (operation) {
-          case "create_document": {
-            const created = await this.dependencies.memory.documents.create({
-              actor,
-              logicalPath: logicalPath as string,
-              title: stringField(work, "title") ?? (action.content ?? "Untitled document").slice(0, 120),
-              contentMarkdown: action.content ?? stringField(work, "content") ?? "",
-              tags: Array.isArray(work.tags) ? work.tags.filter((item): item is string => typeof item === "string") : undefined,
-              threadId: stringField(work, "threadId") ?? undefined,
-            });
-            result = { operation, documentId: created.document.id, version: created.document.currentVersion, path: created.document.logicalPath };
-            break;
-          }
-          case "read_document": {
-            const read = await this.dependencies.memory.documents.read(logicalPath as string, actor);
-            result = { operation, documentId: read.document.id, version: read.document.currentVersion, contentCharacters: read.currentVersion?.contentMarkdown.length ?? 0, path: read.document.logicalPath };
-            break;
-          }
-          case "edit_document": {
-            const edited = await this.dependencies.memory.documents.edit({ actor, logicalPath: logicalPath as string, contentMarkdown: action.content ?? stringField(work, "content") ?? "", changeSummary: stringField(work, "changeSummary") ?? action.reasonSummary });
-            result = { operation, documentId: edited.document.id, version: edited.document.currentVersion, path: edited.document.logicalPath };
-            break;
-          }
-          case "search_documents": {
-            const query = stringField(work, "query") ?? action.content ?? "";
-            const matches = await this.dependencies.memory.search.search(query, { agentId: context.agent.id, threadId: context.thread.id, topK: 5 });
-            result = { operation, matchCount: matches.length, matches: matches.map((match) => ({ sourceId: match.sourceId, type: match.type, title: match.title, pathOrUrl: match.pathOrUrl })) };
-            break;
-          }
-          case "reference_document": {
-            const reference = await this.dependencies.memory.documents.reference({
-              actor, logicalPath: logicalPath as string, threadId: context.thread.id, messageId: context.wakeMessage?.id,
-              relation: stringField(work, "relation") ?? "reference", idempotencyKey: actionKey,
-            });
-            result = { operation, referenceId: reference.id, documentId: reference.documentId, path: logicalPath as string };
-            break;
-          }
-          case "share_document": {
-            const targetAgentId = action.targetAgentId ?? stringField(work, "targetAgentId");
-            if (!targetAgentId) throw new InvalidTransitionError("FILE_WORK", "missing_share_target");
-            const share = await this.dependencies.memory.documents.share({ actor, logicalPath: logicalPath as string, targetAgentId });
-            result = { operation, shareId: share.id, targetAgentId: share.agentId, path: logicalPath as string };
-            break;
-          }
-          default:
-            throw new InvalidTransitionError("FILE_WORK", operation);
-        }
+        const tools = new AgentDocumentTools(this.dependencies.memory);
+        const result = await tools.execute({
+          operation,
+          actor: { agentId: context.agent.id },
+          logicalPath: logicalPath ?? undefined,
+          title: stringField(work, "title") ?? (action.content ?? "Untitled document").slice(0, 120),
+          contentMarkdown: action.content ?? stringField(work, "content") ?? "",
+          query: stringField(work, "query") ?? action.content ?? undefined,
+          versionNumber: numberField(work.versionNumber) ?? numberField(work.version_number) ?? undefined,
+          targetAgentId: action.targetAgentId ?? stringField(work, "targetAgentId") ?? undefined,
+          threadId: operation === "create_document"
+            ? stringField(work, "threadId") ?? undefined
+            : context.thread.id,
+          messageId: context.wakeMessage?.id,
+          relation: stringField(work, "relation") ?? "reference",
+          changeSummary: stringField(work, "changeSummary") ?? action.reasonSummary,
+          tags: Array.isArray(work.tags) ? work.tags.filter((item): item is string => typeof item === "string") : undefined,
+          idempotencyKey: actionKey,
+        });
         await this.dependencies.repositories.events.append({
           eventType: "runtime.file_work_completed",
           aggregateType: "agent_turn",

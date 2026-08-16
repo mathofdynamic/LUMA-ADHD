@@ -11,6 +11,14 @@ export interface LLMUsage {
   readonly totalTokens?: number;
 }
 
+export type LLMReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface LLMStructuredOutput {
+  readonly name: string;
+  readonly description?: string;
+  readonly schema: Readonly<Record<string, unknown>>;
+}
+
 export type LLMFailureKind =
   | "authentication"
   | "rate_limited"
@@ -35,6 +43,8 @@ export interface LLMGenerateRequest {
   readonly messages: readonly LLMMessage[];
   readonly temperature?: number;
   readonly maxOutputTokens?: number;
+  readonly reasoningEffort?: LLMReasoningEffort;
+  readonly structuredOutput?: LLMStructuredOutput;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
   readonly metadata?: Readonly<Record<string, string>>;

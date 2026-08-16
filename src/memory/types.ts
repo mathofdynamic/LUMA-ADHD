@@ -39,6 +39,26 @@ export interface ContextPack {
   readonly items: readonly ContextPackItem[];
   readonly totalCharacters: number;
   readonly truncated: boolean;
+  readonly telemetry: ContextPackTelemetry;
+}
+
+export interface ContextPackTelemetry {
+  readonly queryIntent: "official_factual" | "discussion" | "workspace" | "mixed";
+  readonly retrievalCount: number;
+  readonly sourceTypeCounts: Readonly<Record<string, number>>;
+  readonly officialKnowledgeCount: number;
+  readonly agentDocumentCount: number;
+  readonly sharedDocumentCount: number;
+  readonly totalRetrievedCharacters: number;
+  readonly contextTruncated: boolean;
+  readonly acquisitionOperations: number;
+  readonly selectedSources?: readonly {
+    readonly type: MemoryItemType;
+    readonly sourceId: string;
+    readonly title: string;
+    readonly pathOrUrl: string | null;
+    readonly authority: number;
+  }[];
 }
 
 export interface DocumentCreateRequest {

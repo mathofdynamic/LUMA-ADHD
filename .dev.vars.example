@@ -4,7 +4,7 @@
 
 # Safe or operational identifiers (not authentication secrets).
 LUMA_ENVIRONMENT=local
-LUMA_PHASE=03-agent-runtime
+LUMA_PHASE=05-reputation-and-god
 CLOUDFLARE_ACCOUNT_ID=
 TELEGRAM_GROUP_ID=
 TELEGRAM_ADMIN_USER_IDS=
@@ -21,7 +21,6 @@ TELEGRAM_FINANCE_BOT_TOKEN=
 TELEGRAM_CUSTOMER_BOT_TOKEN=
 TELEGRAM_OPERATIONS_BOT_TOKEN=
 TELEGRAM_HERETIC_BOT_TOKEN=
-TELEGRAM_GOD_BOT_TOKEN=
 
 # Provider configuration. URLs and model names are identifiers; API keys are secrets.
 # Phase 03's verified default is the Nebula /v1 gateway. Leave the key empty for
@@ -31,8 +30,10 @@ NEBULA_BASE_URL=https://nebula-free-llm.nebula-ai-company.workers.dev/v1
 NEBULA_MODEL=auto
 
 GOD_API_KEY=
+GOD_PROVIDER=openai
 GOD_BASE_URL=
 GOD_MODEL=
+GOD_REASONING_EFFORT=high
 
 # Admin authentication secret. Required only when production admin auth is implemented.
 ADMIN_AUTH_SECRET=

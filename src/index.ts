@@ -5,7 +5,7 @@ import type {
   ScheduledController,
 } from "@cloudflare/workers-types";
 
-import { createAgentScheduler, createKnowledgeScheduler } from "./agents/factory";
+import { createAgentScheduler, createGodScheduler, createKnowledgeScheduler, createReputationScheduler, isGodProviderConfigured } from "./agents/factory";
 import { routeApi } from "./api/router";
 import { consumeAgentJobs, type AgentJobMessage } from "./jobs";
 import { handleTelegramWebhook } from "./telegram/webhook";
@@ -15,7 +15,7 @@ function logScheduleTick(controller: ScheduledController): void {
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "04-memory-files-knowledge",
+      phase: "05-reputation-and-god",
     }),
   );
 }
@@ -44,6 +44,8 @@ const handler = {
     try {
       const result = await createAgentScheduler(env).tick();
       const knowledge = await createKnowledgeScheduler(env).tick();
+      const reputation = await createReputationScheduler(env).tick();
+      const god = await createGodScheduler(env, { enabled: isGodProviderConfigured(env) }).tick();
       console.log(JSON.stringify({
         event: "agent_scheduler_tick_completed",
         dueSchedule: result.dueSchedule,
@@ -52,6 +54,9 @@ const handler = {
         inactivityRecovery: result.inactivityRecovery,
         knowledgeSyncJobsCreated: knowledge.jobsCreated,
         knowledgeSourcesConfigured: knowledge.sourcesInitialized,
+        reputationJobsCreated: reputation.jobsCreated,
+        godJobsCreated: god.jobsCreated,
+        godProviderConfigured: god.enabled,
       }));
     } catch {
       console.warn(JSON.stringify({ event: "agent_scheduler_tick_failed" }));

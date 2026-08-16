@@ -15,6 +15,23 @@ export interface RetrievalSearchOptions {
   readonly threadId?: string;
   readonly tags?: readonly string[];
   readonly topK?: number;
+  readonly sourceKinds?: readonly MemoryItemType[];
+}
+
+export type RetrievalIntent = "official_factual" | "discussion" | "workspace" | "mixed";
+
+const SEARCHABLE_SOURCE_KINDS: readonly MemoryItemType[] = [
+  "document", "knowledge_chunk", "message", "thread_summary", "decision", "memory_note",
+];
+
+export function classifyRetrievalIntent(query: string): RetrievalIntent {
+  const normalized = query.normalize("NFC").toLocaleLowerCase();
+  const official = /(?:\b(?:luma|pricing|subscription|workflow|capabilit(?:y|ies)|terms|video)\b|\u0644\u0648\u0645\u0627|\u0642\u06cc\u0645\u062a|\u0627\u0634\u062a\u0631\u0627\u06a9|\u0648\u0631\u06a9\u200c?\u0641\u0644\u0648|\u0642\u0627\u0628\u0644\u06cc\u062a|\u0627\u0628\u0632\u0627\u0631|\u0642\u0648\u0627\u0646\u06cc\u0646|\u0634\u0631\u0627\u06cc\u0637|\u0648\u06cc\u062f\u06cc\u0648|\u0686\u06cc\u0633\u062a|\u0686\u06cc\u0647)/u.test(normalized);
+  const discussion = /(?:\b(?:thread|discussion|proposal|risk|continue|reply|decision)\b|\u0627\u06cc\u0646\s+\u0628\u062d\u062b|\u067e\u06cc\u0634\u0646\u0647\u0627\u062f|\u0631\u06cc\u0633\u06a9|\u0627\u062f\u0627\u0645\u0647|\u062a\u0635\u0645\u06cc\u0645)/u.test(normalized);
+  if (official && discussion) return "mixed";
+  if (official) return "official_factual";
+  if (discussion) return "discussion";
+  return "workspace";
 }
 
 export interface RetrievalResult extends ContextPackItem {
@@ -73,6 +90,8 @@ interface SearchRow {
   updated_at: string;
   thread_id: string | null;
   owner_agent_id: string | null;
+  document_scope: string | null;
+  knowledge_url: string | null;
   bm25_score: number;
 }
 
@@ -86,11 +105,19 @@ export class InstitutionalMemorySearch {
     const expression = ftsExpression(terms);
     const threadId = options.threadId ?? null;
     const agentId = options.agentId ?? null;
+    const sourceKinds = [...new Set(options.sourceKinds ?? SEARCHABLE_SOURCE_KINDS)];
+    if (sourceKinds.length === 0) return [];
+    if (sourceKinds.some((kind) => !SEARCHABLE_SOURCE_KINDS.includes(kind))) {
+      throw new Error("retrieval source kind is not supported");
+    }
+    const sourceClause = `AND f.source_kind IN (${sourceKinds.map(() => "?").join(", ")})`;
     const rows = await this.database.prepare(
       `SELECT f.source_kind, f.source_id, f.title, f.path_or_url, f.content_text,
               f.tags_text, f.authority, f.updated_at,
               COALESCE(d.thread_id, ts.thread_id, dr.thread_id, mn.thread_id, m.thread_id) AS thread_id,
               COALESCE(d.owner_agent_id, mn.agent_id) AS owner_agent_id,
+              d.scope AS document_scope,
+              ks.uri AS knowledge_url,
               bm25(institutional_memory_fts) AS bm25_score
        FROM institutional_memory_fts f
        LEFT JOIN documents d ON f.source_kind = 'document' AND d.id = f.source_id
@@ -101,12 +128,13 @@ export class InstitutionalMemorySearch {
        LEFT JOIN memory_notes mn ON f.source_kind = 'memory_note' AND mn.id = f.source_id
        LEFT JOIN messages m ON f.source_kind = 'message' AND m.id = f.source_id
        WHERE institutional_memory_fts MATCH ?
+         ${sourceClause}
          AND (
            (f.source_kind = 'document' AND d.deleted_at IS NULL AND
              (d.scope = 'shared' OR d.owner_agent_id = ? OR EXISTS (
                SELECT 1 FROM document_shares ds
                WHERE ds.document_id = d.id AND ds.agent_id = ? AND ds.revoked_at IS NULL
-             )))
+             ) OR (d.scope = 'thread' AND d.thread_id = ?)))
            OR (f.source_kind = 'knowledge_chunk' AND ks.status <> 'archived' AND ks.normalized_content IS NOT NULL)
            OR (f.source_kind = 'message' AND m.deleted_at IS NULL AND m.visibility <> 'private'
              AND (? IS NULL OR m.thread_id = ?))
@@ -120,7 +148,7 @@ export class InstitutionalMemorySearch {
        ORDER BY bm25_score ASC, f.authority DESC, f.updated_at DESC
        LIMIT ?`,
     ).bind(
-      expression, agentId, agentId, threadId, threadId, threadId, threadId, threadId, threadId, agentId, threadId, topK * 6,
+      expression, ...sourceKinds, agentId, agentId, threadId, threadId, threadId, threadId, threadId, threadId, threadId, agentId, threadId, topK * 6,
     ).all<SearchRow>();
 
     const asOf = Date.now();
@@ -135,11 +163,13 @@ export class InstitutionalMemorySearch {
         const tagBoost = options.tags?.some((tag) => row.tags_text.toLocaleLowerCase().includes(tag.toLocaleLowerCase())) ? 0.1 : 0;
         return {
           type: itemType(row.source_kind), sourceId: row.source_id, title: row.title,
-          pathOrUrl: row.path_or_url, excerpt: excerpt(row.content_text, terms), authority: row.authority,
+          pathOrUrl: row.path_or_url ?? row.knowledge_url, excerpt: excerpt(row.content_text, terms), authority: row.authority,
           score: textScore * 0.5 + authorityScore * 0.2 + recencyScore * 0.08 + threadBoost + ownerBoost + tagBoost,
           updatedAt: row.updated_at, threadId: row.thread_id, ownerAgentId: row.owner_agent_id,
           matchedTerms: terms, provenance: {
             sourceKind: row.source_kind, authority: row.authority, matchedTerms: terms.join(" "),
+            ...(row.knowledge_url ? { sourceUrl: row.knowledge_url } : {}),
+            ...(row.document_scope ? { scope: row.document_scope } : {}),
           },
         } satisfies RetrievalResult;
       })
@@ -170,6 +200,7 @@ export class ContextPackService {
     readonly maxCharacters?: number;
   }): Promise<ContextPack> {
     const maxCharacters = Math.max(1_000, Math.min(input.maxCharacters ?? 6_000, 12_000));
+    const queryIntent = classifyRetrievalIntent(input.query);
     const candidates: ContextPackItem[] = [];
     const summary = input.threadId ? await this.summaries.get(input.threadId) : null;
     if (summary) {
@@ -210,31 +241,109 @@ export class ContextPackService {
       score: 0.95, updatedAt: note.updatedAt, threadId: note.threadId, ownerAgentId: note.agentId,
       provenance: { sourceKind: "memory_note", scope: note.scope, importance: note.importance },
     })));
+    const topK = input.topK ?? 8;
     const retrieved = await this.searchService.search(input.query, {
-      agentId: input.actor?.agentId, threadId: input.threadId, topK: input.topK ?? 8,
+      agentId: input.actor?.agentId,
+      threadId: input.threadId,
+      topK: Math.min(16, Math.max(1, topK * 2)),
+      sourceKinds: ["document", "message", "thread_summary", "decision", "memory_note"],
     });
-    candidates.push(...retrieved);
+    const official = await this.searchService.search(input.query, {
+      agentId: input.actor?.agentId,
+      threadId: input.threadId,
+      topK: Math.min(8, Math.max(1, topK)),
+      sourceKinds: ["knowledge_chunk"],
+    });
+    candidates.push(...retrieved, ...official);
     const deduped = [...new Map(candidates.map((item) => [`${item.type}:${item.sourceId}`, item])).values()]
       .sort((left, right) => right.score - left.score || right.updatedAt.localeCompare(left.updatedAt));
+    const category = (item: ContextPackItem): "official" | "thread" | "workspace" | "supporting" => {
+      if (item.type === "knowledge_chunk") return "official";
+      if (item.type === "thread_summary" || item.type === "message" || item.type === "decision") return "thread";
+      if (item.type === "document" || item.type === "memory_note") return "workspace";
+      return "supporting";
+    };
+    const caps: Record<ReturnType<typeof category>, number> = {
+      official: Math.floor(maxCharacters * (queryIntent === "official_factual" ? 0.55 : queryIntent === "mixed" ? 0.42 : 0.24)),
+      thread: Math.floor(maxCharacters * (queryIntent === "discussion" ? 0.52 : queryIntent === "mixed" ? 0.36 : 0.28)),
+      workspace: Math.floor(maxCharacters * (queryIntent === "workspace" ? 0.48 : 0.34)),
+      supporting: Math.floor(maxCharacters * 0.24),
+    };
+    const orderedCategories: readonly ReturnType<typeof category>[] = queryIntent === "official_factual"
+      ? ["official", "thread", "workspace", "supporting"]
+      : queryIntent === "discussion"
+        ? ["thread", "official", "workspace", "supporting"]
+        : ["official", "workspace", "thread", "supporting"];
     const items: ContextPackItem[] = [];
+    const selected = new Set<string>();
+    const categoryCharacters = new Map<ReturnType<typeof category>, number>();
     let totalCharacters = 0;
     let truncated = false;
-    for (const item of deduped) {
+    const add = (item: ContextPackItem, respectCap: boolean): boolean => {
+      const key = `${item.type}:${item.sourceId}`;
+      if (selected.has(key)) return false;
       const cost = item.excerpt.length + item.title.length + 80;
-      if (totalCharacters + cost > maxCharacters) {
+      const kind = category(item);
+      const used = categoryCharacters.get(kind) ?? 0;
+      if (totalCharacters + cost > maxCharacters || (respectCap && used > 0 && used + cost > (caps[kind] ?? maxCharacters))) {
         truncated = true;
-        continue;
+        return false;
       }
+      selected.add(key);
       items.push(item);
       totalCharacters += cost;
+      categoryCharacters.set(kind, used + cost);
+      return true;
+    };
+    for (const kind of orderedCategories) {
+      for (const item of deduped.filter((candidate) => category(candidate) === kind)) add(item, true);
     }
-    return { query: input.query, items, totalCharacters, truncated };
+    for (const item of deduped) add(item, false);
+    const sourceTypeCounts: Record<string, number> = {};
+    let officialKnowledgeCount = 0;
+    let agentDocumentCount = 0;
+    let sharedDocumentCount = 0;
+    for (const item of items) {
+      sourceTypeCounts[item.type] = (sourceTypeCounts[item.type] ?? 0) + 1;
+      if (item.type === "knowledge_chunk") officialKnowledgeCount += 1;
+      if (item.type === "document") {
+        const scope = item.provenance.scope;
+        if (scope === "shared") sharedDocumentCount += 1;
+        else agentDocumentCount += 1;
+      }
+    }
+    return {
+      query: input.query,
+      items,
+      totalCharacters,
+      truncated,
+      telemetry: {
+        queryIntent,
+        retrievalCount: items.length,
+        sourceTypeCounts,
+        officialKnowledgeCount,
+        agentDocumentCount,
+        sharedDocumentCount,
+        totalRetrievedCharacters: items.reduce((sum, item) => sum + item.excerpt.length, 0),
+        contextTruncated: truncated,
+        acquisitionOperations: 0,
+        selectedSources: items.slice(0, 16).map((item) => ({
+          type: item.type,
+          sourceId: item.sourceId,
+          title: item.title,
+          pathOrUrl: item.pathOrUrl,
+          authority: item.authority,
+        })),
+      },
+    };
   }
 
   static toPromptText(pack: ContextPack): string {
     if (pack.items.length === 0) return "none";
     return pack.items.map((item, index) => {
-      const provenance = item.pathOrUrl ?? item.provenance.sourceKind ?? item.type;
+      const provenance = item.type === "knowledge_chunk"
+        ? "official_luma_knowledge"
+        : item.pathOrUrl ?? item.provenance.sourceKind ?? item.type;
       return `${index + 1}. [${item.type}; authority=${item.authority}; score=${item.score.toFixed(3)}; source=${provenance}] ${item.title}\n${item.excerpt}`;
     }).join("\n\n");
   }

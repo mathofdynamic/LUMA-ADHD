@@ -213,7 +213,7 @@ Hidden Assumptions، Bias، Risk، Failure Modes، Opportunity Cost و Second-or
 - **Alias:** `god`
 - **Agent ID:** `agent-god`
 - **نام نمایشی:** `GOD | داور`
-- **Username پیشنهادی:** `LumaGodBot`
+- **Telegram:** Bot جداگانه ندارد؛ اعلام عمومی با هویت حمل‌ونقل `gateway` / مرکز لوما انجام می‌شود و نویسندهٔ canonical همچنان `agent-god` است.
 - **نوع:** Frontier Supervisor
 
 ### مسئولیت

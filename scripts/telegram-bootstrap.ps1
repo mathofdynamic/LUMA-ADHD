@@ -136,7 +136,7 @@ if ([string]::IsNullOrWhiteSpace($ownerId)) {
 }
 
 Write-Output 'BOT_IDENTITIES_VERIFIED=9'
-Write-Output 'GOD_BOT_CONFIGURED=false'
+Write-Output 'GOD_TELEGRAM_TRANSPORT=gateway'
 Write-Output 'OWNER_AUTHORIZATION_RESOLVED=true'
 
 if ($Deploy) {

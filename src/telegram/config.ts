@@ -10,7 +10,6 @@ export const TELEGRAM_BOT_ALIASES = [
   "customer",
   "operations",
   "heretic",
-  "god",
 ] as const;
 
 export type TelegramBotAlias = typeof TELEGRAM_BOT_ALIASES[number];
@@ -25,7 +24,6 @@ const TOKEN_KEY_BY_ALIAS: Readonly<Record<TelegramBotAlias, string>> = {
   customer: "TELEGRAM_CUSTOMER_BOT_TOKEN",
   operations: "TELEGRAM_OPERATIONS_BOT_TOKEN",
   heretic: "TELEGRAM_HERETIC_BOT_TOKEN",
-  god: "TELEGRAM_GOD_BOT_TOKEN",
 };
 
 const AGENT_ID_BY_ALIAS: Readonly<Record<TelegramBotAlias, string | null>> = {
@@ -38,7 +36,6 @@ const AGENT_ID_BY_ALIAS: Readonly<Record<TelegramBotAlias, string | null>> = {
   customer: "agent-customer",
   operations: "agent-operations",
   heretic: "agent-heretic",
-  god: "agent-god",
 };
 
 export interface TelegramBotIdentityConfig {

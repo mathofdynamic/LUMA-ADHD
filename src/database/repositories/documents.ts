@@ -273,6 +273,43 @@ export class DocumentRepository {
     return result.results.map(mapDocument);
   }
 
+  async listAccessible(input: {
+    readonly agentId?: string;
+    readonly threadId?: string;
+    readonly system?: boolean;
+    readonly includeDeleted?: boolean;
+    readonly limit?: number;
+  } = {}): Promise<readonly DocumentRecord[]> {
+    const safeLimit = requireLimit(input.limit ?? 20, "accessible document list limit", 100);
+    const result = await this.database
+      .prepare(
+        `SELECT d.* FROM documents d
+         WHERE (? = 1 OR d.deleted_at IS NULL)
+           AND (
+             ? = 1
+             OR d.scope = 'shared'
+             OR (? IS NOT NULL AND d.scope = 'agent' AND d.owner_agent_id = ?)
+             OR (? IS NOT NULL AND EXISTS (
+               SELECT 1 FROM document_shares ds
+               WHERE ds.document_id = d.id AND ds.agent_id = ? AND ds.revoked_at IS NULL
+             ))
+             OR (? IS NOT NULL AND d.scope = 'thread' AND d.thread_id = ?)
+           )
+         ORDER BY d.updated_at DESC
+         LIMIT ?`,
+      )
+      .bind(
+        input.includeDeleted ? 1 : 0,
+        input.system ? 1 : 0,
+        input.agentId ?? null, input.agentId ?? null,
+        input.agentId ?? null, input.agentId ?? null,
+        input.threadId ?? null, input.threadId ?? null,
+        safeLimit,
+      )
+      .all<DocumentRow>();
+    return result.results.map(mapDocument);
+  }
+
   async appendRevision(input: AppendDocumentRevisionInput): Promise<DocumentVersionRecord> {
     validateRevisionAuthor(input);
     const document = await this.getById(input.documentId);
