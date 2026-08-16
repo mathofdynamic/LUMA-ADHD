@@ -14,6 +14,12 @@ import { ScheduledJobRepository } from "./scheduled-jobs";
 import { TelegramOutboundRepository } from "./telegram-outbound";
 import { ThreadLifecycleService, ThreadRepository } from "./threads";
 import { ProviderUsageRepository } from "./provider-usage";
+import {
+  DecisionRecordRepository,
+  KnowledgeSourceRepository,
+  MemoryNoteRepository,
+  ThreadSummaryRepository,
+} from "../../memory/repositories";
 
 export {
   AgentRepository,
@@ -33,6 +39,10 @@ export {
   ThreadRepository,
   UserRepository,
   ProviderUsageRepository,
+  DecisionRecordRepository,
+  KnowledgeSourceRepository,
+  MemoryNoteRepository,
+  ThreadSummaryRepository,
 };
 
 export function createRepositories(database: D1Database) {
@@ -40,6 +50,7 @@ export function createRepositories(database: D1Database) {
   const threads = new ThreadRepository(client);
 
   return {
+    database: client,
     agents: new AgentRepository(client),
     agentRequests: new AgentRequestRepository(client),
     agentVotes: new AgentVoteRepository(client),
@@ -57,5 +68,9 @@ export function createRepositories(database: D1Database) {
     threadLifecycle: new ThreadLifecycleService(threads),
     users: new UserRepository(client),
     providerUsage: new ProviderUsageRepository(client),
+    decisions: new DecisionRecordRepository(client),
+    knowledgeSources: new KnowledgeSourceRepository(client),
+    memoryNotes: new MemoryNoteRepository(client),
+    threadSummaries: new ThreadSummaryRepository(client),
   };
 }

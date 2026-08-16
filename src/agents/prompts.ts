@@ -28,6 +28,7 @@ export interface AgentPromptContext {
   readonly reputationContext?: Readonly<Record<string, number>>;
   readonly memoryContext?: readonly string[];
   readonly fileContext?: readonly string[];
+  readonly retrievedContext?: string;
 }
 
 export interface BuiltAgentPrompt {
@@ -137,11 +138,12 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     `relevant_reputation_context: ${reputation}`,
     `relevant_memory_context: ${memory}`,
     `relevant_file_context: ${files}`,
+    `bounded_retrieval_context:\n${context.retrievedContext ?? "none"}`,
     "\nAVAILABLE ACTIONS",
     "SPEAK publishes a useful message through your mapped persona. WAIT remains internal and is invisible in Telegram.",
     "REQUEST_AGENT records an internal request for another agent; it never sends a Telegram bot-to-bot message.",
     "REQUEST_HUMAN creates a bounded human task. PROPOSE_THREAD and REOPEN_THREAD use durable thread state.",
-    "FILE_WORK and DRAW are deferred capability signals in Phase 03. VOTE records a structured foundation only.",
+    "FILE_WORK executes one validated application-level document operation per turn (create_document, read_document, edit_document, search_documents, reference_document, or share_document). It never grants SQL or filesystem access. DRAW remains deferred to Phase 07. VOTE records a structured foundation only.",
     "\nTELEGRAM COMMUNICATION STYLE",
     TELEGRAM_PRESENTATION_GUIDANCE,
     `\nOUTPUT SCHEMA\n${AGENT_ACTION_SCHEMA}`,

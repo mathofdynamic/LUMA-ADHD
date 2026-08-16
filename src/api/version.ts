@@ -1,6 +1,6 @@
 import { jsonResponse, methodNotAllowed } from "./http";
 
-export function versionResponse(request: Request): Response {
+export function versionResponse(request: Request, environment?: { readonly LUMA_PHASE?: string }): Response {
   if (request.method !== "GET") {
     return methodNotAllowed();
   }
@@ -8,6 +8,6 @@ export function versionResponse(request: Request): Response {
   return jsonResponse({
     name: "luma-adhd",
     version: "0.1.0",
-    phase: "03-agent-runtime",
+    phase: environment?.LUMA_PHASE ?? "unknown",
   });
 }

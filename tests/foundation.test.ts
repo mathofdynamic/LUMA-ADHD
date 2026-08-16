@@ -8,7 +8,7 @@ import {
 
 const environment = {
   LUMA_ENVIRONMENT: "local",
-  LUMA_PHASE: "03-agent-runtime",
+  LUMA_PHASE: "04-memory-files-knowledge",
 } satisfies Pick<Env, "LUMA_ENVIRONMENT" | "LUMA_PHASE">;
 
 describe("foundation API", () => {
@@ -31,7 +31,7 @@ describe("foundation API", () => {
     await expect(response.json()).resolves.toEqual({
       name: "luma-adhd",
       version: "0.1.0",
-      phase: "03-agent-runtime",
+      phase: "04-memory-files-knowledge",
     });
   });
 

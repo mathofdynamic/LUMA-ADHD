@@ -2,6 +2,7 @@ import type { MessageBatch } from "@cloudflare/workers-types";
 import { createAgentRuntime, type AgentRuntimeEnvironment } from "../agents/factory";
 import { FOUNDATION_GUARDRAILS } from "../guardrails";
 import { RuntimeProviderFailure } from "../agents/runtime";
+import { createMemoryServices } from "../memory";
 
 export interface AgentJobMessage {
   readonly kind: "agent.job" | "foundation.noop";
@@ -45,6 +46,7 @@ export async function consumeAgentJobs(
 ): Promise<void> {
   const runtime = createAgentRuntime(env);
   const repositories = runtime.repositories;
+  const memory = createMemoryServices(repositories);
 
   for (const message of batch.messages) {
     if (!isAgentJobMessage(message.body)) {
@@ -70,7 +72,11 @@ export async function consumeAgentJobs(
     }
 
     try {
-      await runtime.processJob(claimed);
+      if (claimed.jobType === "knowledge.sync_source") {
+        await memory.knowledge.processJob(claimed);
+      } else {
+        await runtime.processJob(claimed);
+      }
       await repositories.jobs.complete(claimed.id, leaseOwner);
     } catch (error: unknown) {
       await repositories.jobs.fail(

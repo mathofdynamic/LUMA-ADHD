@@ -237,6 +237,14 @@ export class MessageRepository {
     return result.results.map(mapMessage);
   }
 
+  async countByThread(threadId: string): Promise<number> {
+    const row = await this.database
+      .prepare("SELECT COUNT(*) AS count FROM messages WHERE thread_id = ? AND deleted_at IS NULL")
+      .bind(threadId)
+      .first<{ count: number }>();
+    return Number(row?.count ?? 0);
+  }
+
   async softDelete(id: string): Promise<void> {
     const result = await this.database
       .prepare(

@@ -29,6 +29,8 @@ import {
   type LLMProvider,
 } from "../llm";
 import type { TelegramApplicationService } from "../telegram";
+import { ContextPackService } from "../memory/retrieval";
+import type { MemoryServices } from "../memory";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
@@ -37,6 +39,7 @@ export interface AgentRuntimeDependencies {
   readonly provider: LLMProvider;
   readonly telegram?: Pick<TelegramApplicationService, "projectAgentMessage">;
   readonly modelKey: string;
+  readonly memory?: MemoryServices;
   readonly now?: () => string;
   readonly rng?: () => number;
 }
@@ -248,10 +251,10 @@ export class AgentRuntimeService {
     const profiles = await this.loadProfiles();
     const requestedAgentIds = await this.loadRequestedAgentIds(input.threadId);
     const existingTurns = await this.dependencies.repositories.agentTurns.listByJob(input.job.id, input.maxTurns);
-    let recentMessages = await this.dependencies.repositories.messages.listRecentByThread(
+    let recentMessages = (await this.dependencies.repositories.messages.listRecentByThread(
       input.threadId,
       FOUNDATION_GUARDRAILS.recentContextMessageLimit,
-    );
+    )).filter((message) => message.visibility !== "private");
 
     let turnCount = existingTurns.length;
     let completedTurns = existingTurns.filter((turn) => turn.status === "completed").length;
@@ -350,6 +353,7 @@ export class AgentRuntimeService {
           .catch(() => null);
         if (outputMessage) {
           recentMessages = [...recentMessages, outputMessage]
+            .filter((message) => message.visibility !== "private")
             .slice(-FOUNDATION_GUARDRAILS.recentContextMessageLimit);
         }
       }
@@ -382,6 +386,12 @@ export class AgentRuntimeService {
         stoppedReason,
       },
     });
+
+    if (this.dependencies.memory && input.mode !== "ambient") {
+      await this.dependencies.memory.summaries
+        .maybeCompact({ threadId: input.threadId, force: input.mode === "deep_work" })
+        .catch(() => null);
+    }
 
     return {
       jobId: input.job.id,
@@ -467,6 +477,16 @@ export class AgentRuntimeService {
     const human = context.wakeMessage?.authorUserId
       ? await this.dependencies.repositories.users.getById(context.wakeMessage.authorUserId).catch(() => null)
       : null;
+    const contextPack = this.dependencies.memory
+      ? await this.dependencies.memory.context.build({
+        query: context.wakeMessage?.contentText ?? thread.summary ?? thread.title,
+        actor: { agentId: agent.id },
+        threadId: thread.id,
+        recentMessages: context.recentMessages,
+        topK: 8,
+        maxCharacters: 6_000,
+      })
+      : null;
     const prompt = buildAgentPrompt({
       agent,
       specialties,
@@ -486,6 +506,7 @@ export class AgentRuntimeService {
       ],
       humanDisplayName: human?.displayName,
       reputationContext: { globalRank: agent.rank },
+      retrievedContext: contextPack ? ContextPackService.toPromptText(contextPack) : undefined,
     });
 
     let response: LLMGenerateResponse;
@@ -830,10 +851,93 @@ export class AgentRuntimeService {
         return {};
       }
 
-      case "FILE_WORK":
+      case "FILE_WORK": {
+        if (!this.dependencies.memory) {
+          await this.dependencies.repositories.events.append({
+            eventType: "runtime.file_work_deferred",
+            aggregateType: "thread",
+            aggregateId: context.thread.id,
+            threadId: context.thread.id,
+            jobId: context.job.id,
+            actor: { type: "agent", agentId: context.agent.id },
+            idempotencyKey: actionKey,
+            payload: { intent: action.intent, content: action.content ?? "", metadata: action.metadata, deferredTo: "phase-04" },
+          });
+          return {};
+        }
+        const work = objectField(action.metadata, "fileWork");
+        const operation = stringField(work, "operation") ?? stringField(action.metadata, "operation");
+        const logicalPath = stringField(work, "path") ?? stringField(work, "logicalPath")
+          ?? stringField(action.metadata, "path") ?? stringField(action.metadata, "logicalPath");
+        if (!operation) throw new InvalidTransitionError("FILE_WORK", "missing_operation");
+        if (["create_document", "read_document", "edit_document", "reference_document", "share_document"].includes(operation) && !logicalPath) {
+          throw new InvalidTransitionError("FILE_WORK", "missing_path");
+        }
+        const actor = { agentId: context.agent.id };
+        let result: JsonObject;
+        switch (operation) {
+          case "create_document": {
+            const created = await this.dependencies.memory.documents.create({
+              actor,
+              logicalPath: logicalPath as string,
+              title: stringField(work, "title") ?? (action.content ?? "Untitled document").slice(0, 120),
+              contentMarkdown: action.content ?? stringField(work, "content") ?? "",
+              tags: Array.isArray(work.tags) ? work.tags.filter((item): item is string => typeof item === "string") : undefined,
+              threadId: stringField(work, "threadId") ?? undefined,
+            });
+            result = { operation, documentId: created.document.id, version: created.document.currentVersion, path: created.document.logicalPath };
+            break;
+          }
+          case "read_document": {
+            const read = await this.dependencies.memory.documents.read(logicalPath as string, actor);
+            result = { operation, documentId: read.document.id, version: read.document.currentVersion, contentCharacters: read.currentVersion?.contentMarkdown.length ?? 0, path: read.document.logicalPath };
+            break;
+          }
+          case "edit_document": {
+            const edited = await this.dependencies.memory.documents.edit({ actor, logicalPath: logicalPath as string, contentMarkdown: action.content ?? stringField(work, "content") ?? "", changeSummary: stringField(work, "changeSummary") ?? action.reasonSummary });
+            result = { operation, documentId: edited.document.id, version: edited.document.currentVersion, path: edited.document.logicalPath };
+            break;
+          }
+          case "search_documents": {
+            const query = stringField(work, "query") ?? action.content ?? "";
+            const matches = await this.dependencies.memory.search.search(query, { agentId: context.agent.id, threadId: context.thread.id, topK: 5 });
+            result = { operation, matchCount: matches.length, matches: matches.map((match) => ({ sourceId: match.sourceId, type: match.type, title: match.title, pathOrUrl: match.pathOrUrl })) };
+            break;
+          }
+          case "reference_document": {
+            const reference = await this.dependencies.memory.documents.reference({
+              actor, logicalPath: logicalPath as string, threadId: context.thread.id, messageId: context.wakeMessage?.id,
+              relation: stringField(work, "relation") ?? "reference", idempotencyKey: actionKey,
+            });
+            result = { operation, referenceId: reference.id, documentId: reference.documentId, path: logicalPath as string };
+            break;
+          }
+          case "share_document": {
+            const targetAgentId = action.targetAgentId ?? stringField(work, "targetAgentId");
+            if (!targetAgentId) throw new InvalidTransitionError("FILE_WORK", "missing_share_target");
+            const share = await this.dependencies.memory.documents.share({ actor, logicalPath: logicalPath as string, targetAgentId });
+            result = { operation, shareId: share.id, targetAgentId: share.agentId, path: logicalPath as string };
+            break;
+          }
+          default:
+            throw new InvalidTransitionError("FILE_WORK", operation);
+        }
+        await this.dependencies.repositories.events.append({
+          eventType: "runtime.file_work_completed",
+          aggregateType: "agent_turn",
+          aggregateId: context.turn.id,
+          threadId: context.thread.id,
+          jobId: context.job.id,
+          actor: { type: "agent", agentId: context.agent.id },
+          idempotencyKey: `${actionKey}:completed`,
+          payload: { ...result, intent: action.intent },
+        });
+        return {};
+      }
+
       case "DRAW":
         await this.dependencies.repositories.events.append({
-          eventType: `runtime.${action.intent.toLowerCase()}_deferred`,
+          eventType: "runtime.draw_deferred",
           aggregateType: "thread",
           aggregateId: context.thread.id,
           threadId: context.thread.id,
@@ -844,7 +948,7 @@ export class AgentRuntimeService {
             intent: action.intent,
             content: action.content ?? "",
             metadata: action.metadata,
-            deferredTo: action.intent === "FILE_WORK" ? "phase-04" : "phase-07",
+            deferredTo: "phase-07",
           },
         });
         return {};
