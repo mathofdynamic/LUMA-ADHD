@@ -37,6 +37,7 @@ import { ContextPackService } from "../memory/retrieval";
 import type { MemoryServices } from "../memory";
 import type { ReputationService } from "../reputation/service";
 import { assessOfficialGrounding, type OfficialGroundingAssessment } from "./grounding";
+import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
@@ -47,6 +48,7 @@ export interface AgentRuntimeDependencies {
   readonly modelKey: string;
   readonly memory?: MemoryServices;
   readonly reputation?: ReputationService;
+  readonly runtimeSettings?: EffectiveRuntimeSettings;
   readonly now?: () => string;
   readonly rng?: () => number;
 }
@@ -73,6 +75,7 @@ interface TurnContext {
   readonly requestedAgentIds: readonly string[];
   readonly replyToMessageId: string | undefined;
   readonly wakeReason: string;
+  readonly settings: EffectiveRuntimeSettings;
 }
 
 interface TurnExecutionResult {
@@ -161,10 +164,14 @@ function messageTextForSelection(message: MessageRecord | null, thread: ThreadRe
 export class AgentRuntimeService {
   private readonly now: () => string;
   private readonly rng: () => number;
+  private readonly runtimeSettings: Promise<EffectiveRuntimeSettings>;
 
   constructor(private readonly dependencies: AgentRuntimeDependencies) {
     this.now = dependencies.now ?? nowIso;
     this.rng = dependencies.rng ?? Math.random;
+    this.runtimeSettings = dependencies.runtimeSettings
+      ? Promise.resolve(dependencies.runtimeSettings)
+      : loadEffectiveRuntimeSettings(dependencies.repositories.database).catch(() => DEFAULT_RUNTIME_SETTINGS);
   }
 
   get repositories(): RuntimeRepositories {
@@ -221,14 +228,17 @@ export class AgentRuntimeService {
     readonly addressedAgentId?: string | null;
     readonly wakeReason: string;
   }): Promise<RuntimeBurstResult> {
+    const settings = await this.runtimeSettings;
     return this.runBoundedBurst({
       ...input,
       mode: "interactive",
-      maxTurns: FOUNDATION_GUARDRAILS.interactiveBurstMaxTurns,
+      maxTurns: settings.interactiveBurstMaxTurns,
+      settings,
     });
   }
 
   async runDeepWork(job: JobRecord, threadId: string, trigger: string): Promise<RuntimeBurstResult> {
+    const settings = await this.runtimeSettings;
     return this.runBoundedBurst({
       job,
       messageId: stringField(job.payload, "messageId") ?? "",
@@ -236,11 +246,13 @@ export class AgentRuntimeService {
       addressedAgentId: stringField(job.payload, "addressedAgentId"),
       wakeReason: `deep_work:${trigger}`,
       mode: "deep_work",
-      maxTurns: FOUNDATION_GUARDRAILS.deepWorkMaxTurns,
+      maxTurns: settings.deepWorkMaxTurns,
+      settings,
     });
   }
 
   async runAmbientOpportunity(job: JobRecord, threadId: string): Promise<RuntimeBurstResult> {
+    const settings = await this.runtimeSettings;
     return this.runBoundedBurst({
       job,
       messageId: stringField(job.payload, "messageId") ?? "",
@@ -249,6 +261,7 @@ export class AgentRuntimeService {
       wakeReason: stringField(job.payload, "wakeReason") ?? "ambient_opportunity",
       mode: "ambient",
       maxTurns: 1,
+      settings,
     });
   }
 
@@ -260,6 +273,7 @@ export class AgentRuntimeService {
     readonly wakeReason: string;
     readonly mode: "interactive" | "ambient" | "deep_work";
     readonly maxTurns: number;
+    readonly settings: EffectiveRuntimeSettings;
   }): Promise<RuntimeBurstResult> {
     const completedEvent = await this.dependencies.repositories.events
       .getByIdempotencyKey(`runtime-burst-completed:${input.job.id}`)
@@ -285,7 +299,7 @@ export class AgentRuntimeService {
     const existingTurns = await this.dependencies.repositories.agentTurns.listByJob(input.job.id, input.maxTurns);
     let recentMessages = (await this.dependencies.repositories.messages.listRecentByThread(
       input.threadId,
-      FOUNDATION_GUARDRAILS.recentContextMessageLimit,
+      input.settings.recentMessageContextCount,
     )).filter((message) => message.visibility !== "private");
 
     let turnCount = existingTurns.length;
@@ -371,6 +385,7 @@ export class AgentRuntimeService {
         requestedAgentIds: requested,
         replyToMessageId,
         wakeReason: input.wakeReason,
+        settings: input.settings,
       });
       await this.dependencies.repositories.threads.incrementTurnUsage(input.threadId, this.now());
       turnCount += 1;
@@ -389,7 +404,7 @@ export class AgentRuntimeService {
         if (outputMessage) {
           recentMessages = [...recentMessages, outputMessage]
             .filter((message) => message.visibility !== "private")
-            .slice(-FOUNDATION_GUARDRAILS.recentContextMessageLimit);
+            .slice(-input.settings.recentMessageContextCount);
         }
       }
       if (result.retryableFailure) {
@@ -520,7 +535,7 @@ export class AgentRuntimeService {
         threadId: thread.id,
         recentMessages: context.recentMessages,
         topK: 8,
-        maxCharacters: 6_000,
+        maxCharacters: context.settings.ragContextBudget,
       })
       : new ContextPackService(this.dependencies.repositories.database).build({
         query,
@@ -528,7 +543,7 @@ export class AgentRuntimeService {
         threadId: thread.id,
         recentMessages: context.recentMessages,
         topK: 8,
-        maxCharacters: 6_000,
+        maxCharacters: context.settings.ragContextBudget,
       }));
     const retrievalTelemetry: JsonObject = {
       ...contextPack.telemetry,
@@ -659,7 +674,7 @@ export class AgentRuntimeService {
       );
       ({ step, response } = await parseWithRepair(response));
       while (step.kind === "acquisition") {
-        if (acquisitionOperations >= 3) {
+        if (acquisitionOperations >= context.settings.ragMaxAcquisitionSteps) {
           acquisitionContext = [...acquisitionContext, "The bounded acquisition limit has been reached. Return a final action using only the information already available."];
           prompt = buildPrompt();
           response = await callProvider(

@@ -4,7 +4,7 @@
 
 # Safe or operational identifiers (not authentication secrets).
 LUMA_ENVIRONMENT=local
-LUMA_PHASE=05-reputation-and-god
+LUMA_PHASE=06-admin-observatory
 CLOUDFLARE_ACCOUNT_ID=
 TELEGRAM_GROUP_ID=
 TELEGRAM_ADMIN_USER_IDS=
@@ -31,9 +31,10 @@ NEBULA_MODEL=auto
 
 GOD_API_KEY=
 GOD_PROVIDER=openai
-GOD_BASE_URL=
-GOD_MODEL=
+GOD_BASE_URL=https://api.openai.com/v1
+GOD_MODEL=gpt-5.6-sol
 GOD_REASONING_EFFORT=high
 
-# Admin authentication secret. Required only when production admin auth is implemented.
+# Admin authentication. Use a high-entropy local-only value for local admin tests.
 ADMIN_AUTH_SECRET=
+ADMIN_SESSION_TTL_SECONDS=43200

@@ -1,6 +1,7 @@
 import type { createRepositories } from "../database/repositories";
 import { nowIso } from "../database/ids";
 import type { AgentJobMessage } from "../jobs";
+import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 
 type GodRepositories = ReturnType<typeof createRepositories>;
 
@@ -8,6 +9,7 @@ export interface GodSchedulerDependencies {
   readonly repositories: GodRepositories;
   readonly queue: { send(message: AgentJobMessage): Promise<unknown> };
   readonly enabled: boolean;
+  readonly runtimeSettings?: EffectiveRuntimeSettings;
   readonly now?: () => string;
 }
 
@@ -18,23 +20,27 @@ export interface GodSchedulerTickResult {
 }
 
 const SCHEDULE_KEY = "god-review-12-hour";
-const REVIEW_INTERVAL_MS = 12 * 60 * 60 * 1000;
-
-function plusInterval(timestamp: string): string {
+function plusInterval(timestamp: string, intervalMs: number): string {
   const value = Date.parse(timestamp);
   if (!Number.isFinite(value)) throw new Error("GOD schedule timestamp must be valid");
-  return new Date(value + REVIEW_INTERVAL_MS).toISOString();
+  return new Date(value + intervalMs).toISOString();
 }
 
 export class GodScheduler {
   private readonly now: () => string;
+  private readonly runtimeSettings: Promise<EffectiveRuntimeSettings>;
 
   constructor(private readonly dependencies: GodSchedulerDependencies) {
     this.now = dependencies.now ?? nowIso;
+    this.runtimeSettings = dependencies.runtimeSettings
+      ? Promise.resolve(dependencies.runtimeSettings)
+      : loadEffectiveRuntimeSettings(dependencies.repositories.database).catch(() => DEFAULT_RUNTIME_SETTINGS);
   }
 
   async tick(): Promise<GodSchedulerTickResult> {
     const asOf = this.now();
+    const settings = await this.runtimeSettings;
+    const reviewIntervalMs = settings.godReviewCadenceHours * 60 * 60 * 1000;
     let schedule = await this.dependencies.repositories.reputation.getSchedule(SCHEDULE_KEY);
     if (!schedule) {
       schedule = await this.dependencies.repositories.reputation.upsertSchedule({
@@ -47,7 +53,7 @@ export class GodScheduler {
       return { due: false, jobsCreated: 0, enabled: this.dependencies.enabled };
     }
 
-    const slot = Math.floor(Date.parse(asOf) / REVIEW_INTERVAL_MS);
+    const slot = Math.floor(Date.parse(asOf) / reviewIntervalMs);
     const job = await this.dependencies.repositories.jobs.create({
       jobType: "god.review",
       payload: { source: "scheduler", trigger: "12_hour_review", publishTelegram: false },
@@ -60,7 +66,7 @@ export class GodScheduler {
       await this.dependencies.queue.send({ kind: "agent.job", jobId: job.id, depth: job.chainDepth, createdAt: asOf });
       await this.dependencies.repositories.jobs.markEnqueued(job.id, asOf);
     }
-    await this.dependencies.repositories.reputation.markScheduleEnqueued(SCHEDULE_KEY, plusInterval(asOf), undefined, asOf);
+    await this.dependencies.repositories.reputation.markScheduleEnqueued(SCHEDULE_KEY, plusInterval(asOf, reviewIntervalMs), undefined, asOf);
     return { due: true, jobsCreated: 1, enabled: true };
   }
 }

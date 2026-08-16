@@ -14,11 +14,9 @@
   // These are non-secret identifiers and phase defaults. Runtime secrets are
   // intentionally absent; use .dev.vars locally and Wrangler secrets later.
   "vars": {
-    "LUMA_ENVIRONMENT": "local",
-    "LUMA_PHASE": "05-reputation-and-god",
-    "TELEGRAM_GROUP_ID": "",
-    "TELEGRAM_ADMIN_USER_IDS": "",
-    "TELEGRAM_BOT_IDENTITIES_JSON": "{}",
+    "LUMA_ENVIRONMENT": "production",
+    "LUMA_PHASE": "06-admin-observatory",
+    "ADMIN_SESSION_TTL_SECONDS": "43200",
     "NEBULA_BASE_URL": "https://nebula-free-llm.nebula-ai-company.workers.dev/v1",
     "NEBULA_MODEL": "auto",
     "GOD_PROVIDER": "openai",
@@ -67,6 +65,10 @@
     "run_worker_first": ["/api/*", "/telegram/*"]
   }
 
+  // Telegram group/admin/identity values are live operational configuration.
+  // They are intentionally omitted so `wrangler deploy --keep-vars` cannot
+  // overwrite them with public placeholders. Use .dev.vars locally and the
+  // operator bootstrap/deployment tooling for live values.
   // Runtime secret names (never add them to vars):
   // TELEGRAM_WEBHOOK_SECRET, TELEGRAM_*_BOT_TOKEN, NEBULA_API_KEY,
   // GOD_API_KEY, ADMIN_AUTH_SECRET.

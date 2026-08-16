@@ -10,6 +10,7 @@ import type {
   AgentRecord,
   CreateAgentInput,
 } from "../types";
+import type { JsonObject } from "../validation";
 
 interface AgentRow {
   id: string;
@@ -83,6 +84,15 @@ export interface AgentConfigurationInput {
   readonly promptVersion?: string;
   readonly config?: import("../validation").JsonObject;
   readonly isActive?: boolean;
+}
+
+export interface UpdateAgentProfileInput {
+  readonly agentId: string;
+  readonly specialtyDescription: string;
+  readonly soul: string;
+  readonly personality: string;
+  readonly interests?: readonly string[];
+  readonly config?: JsonObject;
 }
 
 export class AgentRepository {
@@ -175,6 +185,80 @@ export class AgentRepository {
     const result = await this.database.prepare(
       "UPDATE agents SET rank = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
     ).bind(rank, asOf, agentId).run();
+    if (result.meta.changes !== 1) throw new NotFoundError("agent", agentId);
+    return this.getById(agentId);
+  }
+
+  async updateProfile(input: UpdateAgentProfileInput, asOf = nowIso()): Promise<AgentRecord> {
+    const fields: readonly [string, string][] = [
+      ["specialtyDescription", input.specialtyDescription],
+      ["soul", input.soul],
+      ["personality", input.personality],
+    ];
+    for (const [field, value] of fields) {
+      if (typeof value !== "string" || value.length > 8_000) {
+        throw new ValidationError(`agent.${field} must be a string under 8000 characters`);
+      }
+    }
+
+    const current = await this.getById(input.agentId);
+    const configuration = await this.database.prepare(
+      "SELECT COALESCE(MAX(version), 0) AS version FROM agent_configurations WHERE agent_id = ?",
+    ).bind(input.agentId).first<{ version: number }>();
+    const nextVersion = Number(configuration?.version ?? 0) + 1;
+    const nextConfigId = createId("agent-config");
+    const configJson = encodeObject(input.config ?? current.config, "agent.config");
+    const results = await this.database.batch([
+      this.database.prepare(
+        `UPDATE agents SET specialty_description = ?, soul = ?, personality = ?,
+         config_json = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL`,
+      ).bind(
+        input.specialtyDescription,
+        input.soul,
+        input.personality,
+        configJson,
+        asOf,
+        input.agentId,
+      ),
+      this.database.prepare(
+        "UPDATE agent_configurations SET is_active = 0 WHERE agent_id = ? AND is_active = 1",
+      ).bind(input.agentId),
+      this.database.prepare(
+        `INSERT INTO agent_configurations (
+          id, agent_id, version, provider_role, model_key, prompt_version,
+          config_json, is_active, created_at
+        ) VALUES (?, ?, ?, 'normal_agent', ?, 'phase-06-admin', ?, 1, ?)`,
+      ).bind(
+        nextConfigId,
+        input.agentId,
+        nextVersion,
+        typeof current.config.modelKey === "string" ? current.config.modelKey : null,
+        configJson,
+        asOf,
+      ),
+    ]);
+    if (results[0]?.meta.changes !== 1) throw new NotFoundError("agent", input.agentId);
+
+    if (input.interests !== undefined) {
+      const normalized = input.interests
+        .map((interest) => interest.trim())
+        .filter((interest) => interest.length > 0 && interest.length <= 160)
+        .slice(0, 30);
+      await this.database.prepare("DELETE FROM agent_interests WHERE agent_id = ?").bind(input.agentId).run();
+      for (let index = 0; index < normalized.length; index += 1) {
+        await this.database.prepare(
+          "INSERT INTO agent_interests (agent_id, interest, priority) VALUES (?, ?, ?)",
+        ).bind(input.agentId, normalized[index], 100 - index).run();
+      }
+    }
+    return this.getById(input.agentId);
+  }
+
+  async setActive(agentId: string, active: boolean, asOf = nowIso()): Promise<AgentRecord> {
+    const result = await this.database.prepare(
+      "UPDATE agents SET is_active = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+    ).bind(active ? 1 : 0, asOf, agentId).run();
     if (result.meta.changes !== 1) throw new NotFoundError("agent", agentId);
     return this.getById(agentId);
   }

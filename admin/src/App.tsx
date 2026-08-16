@@ -1,40 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 
-type SectionId =
-  | "strategy-room"
-  | "agents"
-  | "threads"
-  | "files"
-  | "human-tasks"
-  | "reputation"
-  | "god"
-  | "system"
-  | "settings";
-
-type HealthState =
-  | { readonly kind: "loading" }
-  | { readonly kind: "ready" }
-  | { readonly kind: "error"; readonly message: string };
+type RecordValue = Record<string, unknown>;
+type Section = "strategy-room" | "agents" | "threads" | "files" | "human-tasks" | "reputation" | "god" | "system" | "settings";
 
 interface NavItem {
-  readonly id: SectionId;
+  readonly id: Section;
   readonly label: string;
   readonly code: string;
-}
-
-interface SectionCopy {
-  readonly eyebrow: string;
-  readonly title: string;
-  readonly description: string;
-  readonly emptyTitle: string;
-  readonly emptyBody: string;
 }
 
 const NAV_ITEMS: readonly NavItem[] = [
   { id: "strategy-room", label: "Strategy Room", code: "01" },
   { id: "agents", label: "Agents", code: "02" },
   { id: "threads", label: "Threads", code: "03" },
-  { id: "files", label: "Files", code: "04" },
+  { id: "files", label: "Files & Knowledge", code: "04" },
   { id: "human-tasks", label: "Human Tasks", code: "05" },
   { id: "reputation", label: "Reputation", code: "06" },
   { id: "god", label: "GOD", code: "07" },
@@ -42,253 +22,262 @@ const NAV_ITEMS: readonly NavItem[] = [
   { id: "settings", label: "Settings", code: "09" },
 ];
 
-const SECTION_COPY: Record<SectionId, SectionCopy> = {
-  "strategy-room": {
-    eyebrow: "Organizational memory / 00",
-    title: "Strategy Room",
-    description:
-      "A calm surface for seeing what the organization is thinking, where reasoning is stalled, and what deserves a human decision.",
-    emptyTitle: "The room is waiting for its first thread",
-    emptyBody:
-      "Phase 00 establishes the observatory. Durable discussions, bounded turns, and D1-backed memory arrive in the next foundation phase.",
-  },
-  agents: {
-    eyebrow: "Roster / 00",
-    title: "Agents",
-    description:
-      "A view into distinct specialties, philosophies, and responsibilities without turning rank into authority.",
-    emptyTitle: "Agent identities are not configured yet",
-    emptyBody:
-      "The foundation records the module boundary and roster contract. Runtime identities become active only when orchestration is implemented.",
-  },
-  threads: {
-    eyebrow: "Deliberation / 00",
-    title: "Threads",
-    description:
-      "Persistent ideas should show their state, participants, evidence, objections, and next move at a glance.",
-    emptyTitle: "No durable threads yet",
-    emptyBody:
-      "There is no synthetic activity here. The panel will stay honest until D1-backed thread state exists.",
-  },
-  files: {
-    eyebrow: "Institutional memory / 00",
-    title: "Files",
-    description:
-      "A text-first memory surface for research, proposals, decisions, and the evolving knowledge of LUMA.",
-    emptyTitle: "The file index is empty",
-    emptyBody:
-      "Markdown files will become searchable and versioned through the memory layer in a later phase.",
-  },
-  "human-tasks": {
-    eyebrow: "Escalation / 00",
-    title: "Human Tasks",
-    description:
-      "Specific requests for information, judgment, approval, or action when the organization reaches the edge of its tools.",
-    emptyTitle: "No human requests are open",
-    emptyBody:
-      "This empty state is intentional. LUMA should ask for human help only when a concrete blocker exists.",
-  },
-  reputation: {
-    eyebrow: "Governance / 00",
-    title: "Reputation",
-    description:
-      "Influence should grow slowly from evidence, contribution, collaboration, and outcomes—not message volume.",
-    emptyTitle: "Reputation has not started moving",
-    emptyBody:
-      "The multidimensional reputation contract is reserved for later scoring and evaluation phases.",
-  },
-  god: {
-    eyebrow: "Supervision / 00",
-    title: "GOD",
-    description:
-      "A bounded supervisory layer for challenging weak consensus, surfacing missing perspectives, and protecting long-term quality.",
-    emptyTitle: "No supervisory review exists",
-    emptyBody:
-      "GOD remains unconfigured until the frontier-provider and evaluation phases. Nothing is simulated here.",
-  },
-  system: {
-    eyebrow: "Runtime / 00",
-    title: "System",
-    description:
-      "The operational view for readiness, configuration, quota pressure, failures, and the boundaries that keep the system free-plan compatible.",
-    emptyTitle: "Foundation runtime only",
-    emptyBody:
-      "Worker health is available. D1, Queue, Cron, and Static Assets are scaffolded locally; production resources are intentionally unconfigured.",
-  },
-  settings: {
-    eyebrow: "Configuration / 00",
-    title: "Settings",
-    description:
-      "A deliberate home for safe identifiers and guarded runtime configuration. Secrets never belong in the interface or repository.",
-    emptyTitle: "Settings are not editable yet",
-    emptyBody:
-      "Configuration is documented in docs/SETUP_AND_SECRETS.md. Editing and authentication arrive with the admin phases.",
-  },
-};
-
-function App() {
-  const [activeSection, setActiveSection] = useState<SectionId>("strategy-room");
-  const [health, setHealth] = useState<HealthState>({ kind: "loading" });
-  const activeCopy = useMemo(() => SECTION_COPY[activeSection], [activeSection]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    fetch("/api/health", { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Worker returned ${response.status}`);
-        }
-        return response.json() as Promise<{ ready?: boolean }>;
-      })
-      .then((payload) => {
-        setHealth(payload.ready ? { kind: "ready" } : { kind: "error", message: "Worker is not ready" });
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-        setHealth({
-          kind: "error",
-          message: error instanceof Error ? error.message : "Unable to reach the Worker",
-        });
-      });
-
-    return () => controller.abort();
-  }, []);
-
-  const healthLabel = health.kind === "loading"
-    ? "Checking runtime"
-    : health.kind === "ready"
-      ? "Worker ready"
-      : "Local shell only";
-
-  return (
-    <div className="app-shell">
-      <a className="skip-link" href="#main-content">Skip to content</a>
-      <aside className="sidebar" aria-label="Primary navigation">
-        <div className="brand-lockup">
-          <div className="brand-symbol" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
-          <div>
-            <p className="brand-name">LUMA <span>ADHD</span></p>
-            <p className="brand-subtitle">organization observatory</p>
-          </div>
-        </div>
-
-        <div className="sidebar-rule" />
-        <p className="nav-label">Navigate</p>
-        <nav className="nav-list">
-          {NAV_ITEMS.map((item) => (
-            <button
-              className={`nav-item${activeSection === item.id ? " is-active" : ""}`}
-              key={item.id}
-              type="button"
-              aria-current={activeSection === item.id ? "page" : undefined}
-              onClick={() => setActiveSection(item.id)}
-            >
-              <span className="nav-code">{item.code}</span>
-              <span>{item.label}</span>
-              {activeSection === item.id && <span className="nav-pulse" aria-hidden="true" />}
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="phase-marker">
-            <span className="status-dot" aria-hidden="true" />
-            <span>Phase 00 / Foundation</span>
-          </div>
-          <p>Persistent thinking, deliberately bounded.</p>
-        </div>
-      </aside>
-
-      <main id="main-content" className="main-content">
-        <header className="topbar">
-          <div className="breadcrumb">
-            <span>LUMA ADHD</span>
-            <span className="breadcrumb-separator">/</span>
-            <span className="breadcrumb-current">Observatory</span>
-          </div>
-          <div className={`runtime-status runtime-${health.kind}`}>
-            <span className="status-dot" aria-hidden="true" />
-            <span>{healthLabel}</span>
-          </div>
-        </header>
-
-        <div className="page-frame">
-          <section className="hero-section" aria-labelledby="page-title">
-            <div className="hero-copy">
-              <p className="eyebrow"><span className="eyebrow-line" />{activeCopy.eyebrow}</p>
-              <h1 id="page-title">{activeCopy.title}</h1>
-              <p className="hero-description">{activeCopy.description}</p>
-            </div>
-            <div className="orbit-stage" aria-hidden="true">
-              <div className="orbit orbit-outer" />
-              <div className="orbit orbit-inner" />
-              <div className="orbit-core"><span>00</span></div>
-              <span className="orbit-node orbit-node-a" />
-              <span className="orbit-node orbit-node-b" />
-              <span className="orbit-node orbit-node-c" />
-            </div>
-          </section>
-
-          <section className="observatory-panel" aria-labelledby="empty-state-title">
-            <div className="panel-heading">
-              <div>
-                <p className="panel-kicker">Current surface</p>
-                <h2>Observatory signal</h2>
-              </div>
-              <span className="panel-code">LUMA / 00</span>
-            </div>
-
-            <div className="empty-state">
-              <div className="empty-glyph" aria-hidden="true">
-                <span className="glyph-ring" />
-                <span className="glyph-center" />
-              </div>
-              <div className="empty-copy">
-                <p className="empty-label">Unconfigured surface</p>
-                <h2 id="empty-state-title">{activeCopy.emptyTitle}</h2>
-                <p>{activeCopy.emptyBody}</p>
-              </div>
-              <button className="quiet-button" type="button" onClick={() => setActiveSection("system")}>
-                <span>View foundation state</span>
-                <span aria-hidden="true">↗</span>
-              </button>
-            </div>
-          </section>
-
-          <section className="foundation-strip" aria-label="Foundation boundaries">
-            <div className="strip-intro">
-              <p className="panel-kicker">Boundaries in place</p>
-              <p>Only the surfaces that exist are shown.</p>
-            </div>
-            <div className="boundary-list">
-              <div className="boundary-item"><span>01</span><strong>Worker</strong><small>ready</small></div>
-              <div className="boundary-item"><span>02</span><strong>D1</strong><small>local binding</small></div>
-              <div className="boundary-item"><span>03</span><strong>Queue</strong><small>reserved</small></div>
-              <div className="boundary-item"><span>04</span><strong>Assets</strong><small>static shell</small></div>
-            </div>
-          </section>
-
-          {health.kind === "error" && (
-            <p className="runtime-note" role="status">
-              {health.message}. The shell remains usable; start the local Worker to see its readiness signal.
-            </p>
-          )}
-        </div>
-
-        <footer className="main-footer">
-          <span>Cloudflare Free-compatible foundation</span>
-          <span className="footer-mark">D1 · CRON · QUEUE · STATIC ASSETS</span>
-        </footer>
-      </main>
-    </div>
-  );
+class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
 }
 
-export default App;
+function record(value: unknown): RecordValue {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as RecordValue : {};
+}
+
+function arrayValue(value: unknown): readonly RecordValue[] {
+  return Array.isArray(value) ? value.map(record) : [];
+}
+
+function text(value: unknown, fallback: string | number = "—"): string {
+  return typeof value === "string" && value.length > 0 ? value : typeof fallback === "string" ? fallback : "—";
+}
+
+function numberValue(value: unknown, fallback = 0): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function dateLabel(value: unknown): string {
+  if (typeof value !== "string" || !value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function relativeDate(value: unknown): string {
+  if (typeof value !== "string" || !value) return "—";
+  const age = Date.now() - Date.parse(value);
+  if (!Number.isFinite(age)) return "—";
+  const minutes = Math.max(0, Math.floor(age / 60_000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function routeFor(pathname: string): { readonly section: Section; readonly id?: string; readonly sub?: string } {
+  const parts = pathname.split("/").filter(Boolean);
+  const section = (parts[1] as Section | undefined) ?? "strategy-room";
+  const known = NAV_ITEMS.some((item) => item.id === section);
+  return { section: known ? section : "strategy-room", id: parts[2], sub: parts[3] };
+}
+
+async function requestJson<T>(path: string, init: RequestInit = {}, csrf?: string): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  if (csrf && init.method && init.method !== "GET") headers.set("x-csrf-token", csrf);
+  const response = await fetch(path, { ...init, headers, credentials: "same-origin" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new ApiError(text(record(payload).message, `Request failed (${response.status})`), response.status);
+  return payload as T;
+}
+
+function useEndpoint<T>(path: string | null, csrf: string, reloadKey = 0, interval = 0): { readonly data: T | null; readonly loading: boolean; readonly error: string | null; readonly refresh: () => void } {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(path !== null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (!path) return undefined;
+    let disposed = false;
+    const controller = new AbortController();
+    const load = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(path, { credentials: "same-origin", signal: controller.signal });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new ApiError(text(record(payload).message, `Request failed (${response.status})`), response.status);
+        if (!disposed) { setData(payload as T); setError(null); }
+      } catch (cause: unknown) {
+        if (!disposed && !(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : "Unable to load this surface");
+      } finally {
+        if (!disposed) setLoading(false);
+      }
+    };
+    void load();
+    let timer: number | undefined;
+    const schedule = () => {
+      if (interval > 0 && document.visibilityState === "visible") timer = window.setTimeout(() => { void load().finally(schedule); }, interval);
+    };
+    schedule();
+    const onVisibility = () => { if (document.visibilityState === "visible") void load(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { disposed = true; controller.abort(); if (timer !== undefined) window.clearTimeout(timer); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [path, csrf, reloadKey, refreshKey, interval]);
+
+  return { data, loading, error, refresh: () => setRefreshKey((value) => value + 1) };
+}
+
+function LoadingState({ label = "Loading live data" }: { readonly label?: string }) {
+  return <div className="state-panel loading-state"><span className="loading-mark" aria-hidden="true" /><span>{label}</span></div>;
+}
+
+function EmptyState({ title, body }: { readonly title: string; readonly body: string }) {
+  return <div className="state-panel empty-state"><span className="empty-mark" aria-hidden="true">○</span><div><strong>{title}</strong><p>{body}</p></div></div>;
+}
+
+function ErrorState({ message, retry }: { readonly message: string; readonly retry: () => void }) {
+  return <div className="state-panel error-state"><div><strong>Could not load this surface</strong><p>{message}</p></div><button className="button button-quiet" type="button" onClick={retry}>Retry</button></div>;
+}
+
+function StatusPill({ value, tone }: { readonly value: string; readonly tone?: "good" | "warn" | "bad" | "quiet" }) {
+  return <span className={`status-pill status-${tone ?? (value === "active" || value === "operating" ? "good" : value === "attention" || value === "blocked" ? "warn" : "quiet")}`}><i aria-hidden="true" />{value}</span>;
+}
+
+function SectionHeader({ eyebrow, title, description, refresh, updatedAt }: { readonly eyebrow: string; readonly title: string; readonly description: string; readonly refresh?: () => void; readonly updatedAt?: unknown }) {
+  return <header className="section-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="section-description">{description}</p></div><div className="header-actions">{updatedAt !== undefined && <span className="updated-label">Updated {relativeDate(updatedAt)}</span>}{refresh && <button className="button button-quiet" type="button" onClick={refresh}>Refresh</button>}</div></header>;
+}
+
+function Panel({ title, meta, children, className = "" }: { readonly title: string; readonly meta?: string; readonly children: ReactNode; readonly className?: string }) {
+  return <section className={`panel ${className}`}><div className="panel-head"><h2>{title}</h2>{meta && <span>{meta}</span>}</div>{children}</section>;
+}
+
+function TextBlock({ value, className = "" }: { readonly value: unknown; readonly className?: string }) {
+  return <div className={`text-block ${className}`} dir="auto">{text(value, "")}</div>;
+}
+
+function Login({ onAuthenticated }: { readonly onAuthenticated: (csrf: string) => void }) {
+  const [accessKey, setAccessKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setError(null);
+    try {
+      const payload = await requestJson<RecordValue>("/api/admin/auth/login", { method: "POST", body: JSON.stringify({ accessKey }) });
+      const csrf = payload.csrfToken;
+      if (typeof csrf !== "string") throw new Error("The server did not issue a session token.");
+      setAccessKey(""); onAuthenticated(csrf);
+    } catch (cause: unknown) { setError(cause instanceof Error ? cause.message : "Login failed"); }
+    finally { setBusy(false); }
+  };
+  return <main className="login-shell"><div className="login-grid"><div className="login-copy"><p className="eyebrow">LUMA ADHD / PRIVATE OBSERVATORY</p><h1>See the organization<br /><em>as it moves.</em></h1><p>A quiet operator surface for live discussions, Agent work, human attention, memory, reputation, and supervision.</p><div className="login-signal"><span className="signal-line" /><span>Private operator access</span></div></div><form className="login-form" onSubmit={submit}><div className="form-mark" aria-hidden="true">L</div><h2>Enter access key</h2><p>Your key is checked by the Worker and never sent back to the browser.</p><label htmlFor="operator-key">Operator access key</label><input id="operator-key" type="password" autoComplete="current-password" value={accessKey} onChange={(event) => setAccessKey(event.target.value)} required /><button className="button button-primary button-wide" type="submit" disabled={busy}>{busy ? "Checking…" : "Open observatory"}</button>{error && <p className="form-error" role="alert">{error}</p>}<p className="login-note">Sessions expire automatically. Keep this panel private.</p></form></div></main>;
+}
+
+function StrategyRoom({ csrf, onNavigate, runMutation }: { readonly csrf: string; readonly onNavigate: (path: string) => void; readonly runMutation: (path: string, init: RequestInit) => Promise<void> }) {
+  const live = useEndpoint<RecordValue>("/api/admin/strategy-room", csrf, 0, 15_000);
+  const data = record(live.data); const status = record(data.status); const agents = arrayValue(data.agents); const threads = arrayValue(data.threads); const attention = arrayValue(data.attention); const activity = arrayValue(data.activity); const god = record(data.god);
+  if (live.loading && !live.data) return <><SectionHeader eyebrow="Live organization / 01" title="Strategy Room" description="What needs the operator's attention now?" /><LoadingState label="Reading the organization" /></>;
+  if (live.error && !live.data) return <><SectionHeader eyebrow="Live organization / 01" title="Strategy Room" description="What needs the operator's attention now?" /><ErrorState message={live.error} retry={live.refresh} /></>;
+  return <><SectionHeader eyebrow="Live organization / 01" title="Strategy Room" description="A compact view of real activity, unresolved work, and the next useful human intervention." refresh={live.refresh} updatedAt={data.generatedAt} /><div className="status-ribbon"><div><span className="eyebrow">Operating state</span><StatusPill value={text(status.operatingState, "quiet")} /></div><div><b>{numberValue(status.activeAgents)}</b><span>active Agents</span></div><div><b>{numberValue(status.activeImportantThreads)}</b><span>important threads</span></div><div><b>{numberValue(status.humanRequired)}</b><span>human-required</span></div><div><b>{numberValue(status.failedJobs)}</b><span>failed jobs</span></div><div><b>{numberValue(status.openGodDirectives)}</b><span>open GOD directives</span></div></div><div className="observatory-grid"><Panel title="Needs attention" meta={`${attention.length} surfaced`} className="attention-panel">{attention.length === 0 ? <EmptyState title="Nothing is waiting on the operator." body="No blocked thread, failed job, pending task, or unresolved high-priority directive crossed the attention threshold." /> : <div className="attention-list">{attention.map((item) => <button className="attention-item" type="button" key={`${text(item.kind)}-${text(item.threadId, text(item.jobId, text(item.directiveId, text(item.id))))}`} onClick={() => item.threadId ? onNavigate(`/admin/threads/${String(item.threadId)}`) : undefined}><span className={`attention-severity severity-${text(item.severity, "normal")}`} /><div><strong dir="auto">{text(item.title, "Untitled attention item")}</strong><p>{text(item.why, "Requires review")}</p><small>{text(item.age, "—")} · {text(item.agent, text(item.thread, "organization"))}</small></div></button>)}</div>}</Panel><Panel title="The living roster" meta={`${agents.length} identities`} className="roster-panel"><div className="agent-strip">{agents.map((agent) => <button className="agent-chip" type="button" key={text(agent.id)} onClick={() => onNavigate(`/admin/agents/${String(agent.id)}`)}><span className={`agent-avatar avatar-${text(agent.status, "quiet")}`}>{text(agent.displayName, "?").slice(0, 1)}</span><span><strong dir="auto">{text(agent.displayName)}</strong><small>{text(agent.specialty)}</small></span><StatusPill value={text(agent.status, "quiet")} /></button>)}</div></Panel><Panel title="Important active threads" meta="bounded view" className="thread-panel"><div className="list-table">{threads.length === 0 ? <EmptyState title="The organization currently has no active discussions." body="No real thread data matched the attention and importance filters." /> : threads.map((thread) => <button className="list-row" type="button" key={text(thread.id)} onClick={() => onNavigate(`/admin/threads/${String(thread.id)}`)}><div className="row-main"><strong dir="auto">{text(thread.title)}</strong><span dir="auto">{text(thread.summary, "No summary yet.")}</span></div><div className="row-meta"><StatusPill value={text(thread.state)} /><span>{relativeDate(thread.lastActivityAt)}</span><span>{numberValue(thread.messageCount)} messages</span></div></button>)}</div></Panel><Panel title="Latest GOD review" meta={god.id ? relativeDate(god.createdAt) : "No review"} className="god-panel">{god.id ? <><StatusPill value={text(god.status)} /><TextBlock value={god.summary} /><div className="inline-facts"><span>{numberValue(god.directiveCount)} directives</span><span>{numberValue(god.evaluationCount)} evaluations</span></div><button className="text-button" type="button" onClick={() => onNavigate(`/admin/god/reviews/${String(god.id)}`)}>Open review →</button></> : <EmptyState title="No completed supervisory review." body="The panel will show the real review state when GOD has produced one." />}</Panel><Panel title="Meaningful activity" meta="recent events" className="activity-panel"><div className="activity-list">{activity.length === 0 ? <EmptyState title="No recent meaningful activity." body="Internal noise is deliberately excluded from this view." /> : activity.slice(0, 8).map((event) => <div className="activity-item" key={text(event.id)}><span className="activity-time">{relativeDate(event.occurred_at)}</span><div><strong>{text(event.event_type)}</strong><p>{text(event.actor_name, "System")} · {text(event.thread_title, text(event.aggregate_type))}</p></div></div>)}</div></Panel></div><div className="pressure-line"><span>Application-observed activity</span><span>{numberValue(record(data.pressure).jobsDay)} jobs / 24h</span><span>{numberValue(record(data.pressure).agentTurnsDay)} Agent turns / 24h</span><span>{numberValue(record(data.pressure).providerCallsDay)} provider calls / 24h</span><span>{text(record(data.pressure).cloudflareQuota, "Cloudflare quota not measured")}</span></div></>;
+}
+
+function AgentsPage({ csrf, onNavigate }: { readonly csrf: string; readonly onNavigate: (path: string) => void }) {
+  const live = useEndpoint<RecordValue>("/api/admin/agents", csrf); const agents = arrayValue(record(live.data).items); const normal = agents.filter((agent) => !Boolean(agent.isSupervisor)); const god = agents.find((agent) => Boolean(agent.isSupervisor));
+  if (live.loading && !live.data) return <><SectionHeader eyebrow="Roster / 02" title="Agents" description="Eight working perspectives, one supervisory identity, no synthetic activity." /><LoadingState /></>;
+  if (live.error && !live.data) return <><SectionHeader eyebrow="Roster / 02" title="Agents" description="Eight working perspectives, one supervisory identity, no synthetic activity." /><ErrorState message={live.error} retry={live.refresh} /></>;
+  return <><SectionHeader eyebrow="Roster / 02" title="Agents" description="Inspect identity, runtime state, memory, reputation, and safe configuration without exposing hidden reasoning." refresh={live.refresh} /><div className="agent-roster-grid">{normal.map((agent) => <button className="roster-card" type="button" key={text(agent.id)} onClick={() => onNavigate(`/admin/agents/${String(agent.id)}`)}><div className="roster-card-top"><span className={`agent-avatar avatar-${text(agent.status, "quiet")}`}>{text(agent.displayName).slice(0, 1)}</span><StatusPill value={text(agent.status)} /></div><h2 dir="auto">{text(agent.displayName)}</h2><p>{text(agent.specialty)}</p><div className="card-facts"><span>Rank <b>{numberValue(agent.rank, 10).toFixed(1)}</b></span><span>{relativeDate(agent.lastActivityAt)}</span></div></button>)}</div><div className="supervisor-section"><p className="eyebrow">Supervisory identity</p>{god ? <button className="supervisor-card" type="button" onClick={() => onNavigate(`/admin/agents/${String(god.id)}`)}><div><span className="supervisor-glyph">G</span><div><h2>{text(god.displayName)}</h2><p>Reviews the organization. Excluded from normal Rank competition.</p></div></div><StatusPill value={text(god.status, "configured")} /></button> : <EmptyState title="GOD identity is unavailable." body="The seeded supervisory identity should appear separately from normal Agents." />}</div></>;
+}
+
+function AgentDetail({ csrf, agentId, onNavigate, runMutation }: { readonly csrf: string; readonly agentId: string; readonly onNavigate: (path: string) => void; readonly runMutation: (path: string, init: RequestInit) => Promise<void> }) {
+  const live = useEndpoint<RecordValue>(`/api/admin/agents/${encodeURIComponent(agentId)}`, csrf); const agent = record(live.data); const [editing, setEditing] = useState(false); const [draft, setDraft] = useState<RecordValue>({});
+  useEffect(() => { if (live.data) setDraft({ specialtyDescription: agent.specialtyDescription, soul: agent.soul, personality: agent.personality, interests: Array.isArray(agent.interests) ? agent.interests.map((item) => text(item)).join("\n") : "" }); }, [live.data]);
+  if (live.loading && !live.data) return <><BackButton onClick={() => onNavigate("/admin/agents")} /><LoadingState /></>;
+  if (live.error && !live.data) return <><BackButton onClick={() => onNavigate("/admin/agents")} /><ErrorState message={live.error} retry={live.refresh} /></>;
+  const save = async () => { await runMutation(`/api/admin/agents/${encodeURIComponent(agentId)}`, { method: "PATCH", body: JSON.stringify({ ...draft, interests: text(draft.interests, "").split("\n").map((item) => item.trim()).filter(Boolean) }) }); setEditing(false); live.refresh(); };
+  const toggle = async () => { await runMutation(`/api/admin/agents/${encodeURIComponent(agentId)}/${agent.isActive ? "pause" : "resume"}`, { method: "POST", body: "{}" }); live.refresh(); };
+  const reputation = record(agent.reputation); const states = Array.isArray(reputation.states) ? reputation.states.map(record) : [];
+  return <><BackButton onClick={() => onNavigate("/admin/agents")} /><SectionHeader eyebrow="Agent observatory / 02" title={text(agent.displayName)} description={text(agent.specialtyDescription)} refresh={live.refresh} /><div className="detail-grid"><Panel title="Identity & runtime" meta={text(agent.slug)}><div className="identity-block"><span className={`agent-avatar avatar-${text(agent.status, "quiet")}`}>{text(agent.displayName).slice(0, 1)}</span><div><h2 dir="auto">{text(agent.displayName)}</h2><p>{text(agent.specialty)}</p><StatusPill value={text(agent.status)} /></div></div><div className="fact-grid"><Fact label="Rank" value={numberValue(agent.rank, 10).toFixed(1)} /><Fact label="Last turn" value={relativeDate(agent.lastTurnAt)} /><Fact label="Recent message" value={relativeDate(agent.recentMessageAt)} /><Fact label="Provider" value={text(record(agent.config).modelKey, "runtime configured")} /></div><div className="button-row"><button className="button button-quiet" type="button" onClick={() => setEditing((value) => !value)}>{editing ? "Close editor" : "Edit safe configuration"}</button>{!Boolean(agent.isSupervisor) && <button className={`button ${agent.isActive ? "button-danger" : "button-primary"}`} type="button" onClick={() => void toggle()}>{agent.isActive ? "Pause Agent" : "Resume Agent"}</button>}</div></Panel><Panel title="Reputation & evidence" meta="inspectable, not gamified"><div className="dimension-list">{states.length === 0 ? <EmptyState title="No domain evidence yet." body="Declared specialty does not create reputation. The system waits for durable evidence." /> : states.map((state) => <div className="dimension-row" key={`${text(state.domain)}-${text(state.agent_id)}`}><span>{text(state.domain)}</span><div><b>{numberValue(state.rank, 10).toFixed(1)}</b><small>E {numberValue(state.epistemic).toFixed(2)} · C {numberValue(state.contribution).toFixed(2)} · O {numberValue(state.outcome).toFixed(2)} · K {numberValue(state.collaboration).toFixed(2)}</small></div></div>)}</div><button className="text-button" type="button" onClick={() => onNavigate(`/admin/reputation/${encodeURIComponent(agentId)}`)}>Open evidence history →</button></Panel><Panel title="Persistent knowledge" meta={`${arrayValue(agent.files).length} accessible files`}><div className="compact-list">{arrayValue(agent.files).slice(0, 8).map((file) => <div className="compact-row" key={text(file.id)}><strong dir="auto">{text(file.title)}</strong><span>{text(file.logicalPath)}</span></div>)}</div>{arrayValue(agent.files).length === 0 && <EmptyState title="No Agent files yet." body="Persistent workspace is available when durable work is worth keeping." />}</Panel><Panel title="Recent turns" meta="bounded history"><div className="compact-list">{arrayValue(agent.turns).slice(0, 8).map((turn) => <div className="compact-row" key={text(turn.id)}><strong>{text(turn.status)}</strong><span>{text(turn.wake_reason)} · {dateLabel(turn.created_at)}</span></div>)}</div></Panel></div>{editing && <div className="editor-drawer"><div className="drawer-head"><h2>Safe Agent configuration</h2><button className="icon-button" type="button" onClick={() => setEditing(false)} aria-label="Close">×</button></div><label>Specialty description<textarea value={text(draft.specialtyDescription, "")} onChange={(event) => setDraft({ ...draft, specialtyDescription: event.target.value })} /></label><label>Soul<textarea value={text(draft.soul, "")} onChange={(event) => setDraft({ ...draft, soul: event.target.value })} /></label><label>Personality<textarea value={text(draft.personality, "")} onChange={(event) => setDraft({ ...draft, personality: event.target.value })} /></label><label>Interests, one per line<textarea value={text(draft.interests, "")} onChange={(event) => setDraft({ ...draft, interests: event.target.value })} /></label><button className="button button-primary" type="button" onClick={() => void save()}>Save configuration</button></div>}</>;
+}
+
+function ThreadsPage({ csrf, onNavigate }: { readonly csrf: string; readonly onNavigate: (path: string) => void }) {
+  const [state, setState] = useState(""); const live = useEndpoint<RecordValue>(`/api/admin/threads?limit=80${state ? `&state=${encodeURIComponent(state)}` : ""}`, csrf, 0, 20_000); const items = arrayValue(record(live.data).items);
+  return <><SectionHeader eyebrow="Deliberation / 03" title="Threads" description="Observe canonical discussions, lifecycle state, participants, and where human attention is required." refresh={live.refresh} /><div className="filter-bar"><label>Lifecycle<select value={state} onChange={(event) => setState(event.target.value)}><option value="">All active states</option>{["open", "exploring", "debating", "evidence_gathering", "developing", "synthesizing", "human_required", "blocked", "reopened", "decided", "parked"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div>{live.loading && !live.data ? <LoadingState /> : live.error && !live.data ? <ErrorState message={live.error} retry={live.refresh} /> : items.length === 0 ? <EmptyState title="The organization currently has no threads in this view." body="Filters only show canonical D1 data." /> : <div className="list-table">{items.map((thread) => <button className="list-row thread-list-row" type="button" key={text(thread.id)} onClick={() => onNavigate(`/admin/threads/${String(thread.id)}`)}><div className="row-main"><strong dir="auto">{text(thread.title)}</strong><span dir="auto">{text(thread.summary, "No summary yet.")}</span><small>{Array.isArray(thread.participants) ? thread.participants.map(text).join(" · ") : "No participants"}</small></div><div className="row-meta"><StatusPill value={text(thread.state)} /><span>priority {numberValue(thread.priority)}</span><span>{relativeDate(thread.lastActivityAt)}</span></div></button>)}</div>}</>;
+}
+
+function BackButton({ onClick }: { readonly onClick: () => void }) { return <button className="back-button" type="button" onClick={onClick}>← Back to overview</button>; }
+function Fact({ label, value }: { readonly label: string; readonly value: string }) { return <div className="fact"><span>{label}</span><b>{value}</b></div>; }
+
+function ThreadDetail({ csrf, threadId, onNavigate, runMutation }: { readonly csrf: string; readonly threadId: string; readonly onNavigate: (path: string) => void; readonly runMutation: (path: string, init: RequestInit) => Promise<void> }) {
+  const live = useEndpoint<RecordValue>(`/api/admin/threads/${encodeURIComponent(threadId)}`, csrf); const data = record(live.data); const thread = data; const messages = arrayValue(data.messages); const turns = arrayValue(data.turns); const [busy, setBusy] = useState(false);
+  const action = async (name: string) => { if (name !== "continue" && !window.confirm(`Apply ${name} to this thread? This changes its canonical lifecycle.`)) return; setBusy(true); try { await runMutation(`/api/admin/threads/${encodeURIComponent(threadId)}/action`, { method: "POST", body: JSON.stringify({ action: name }) }); live.refresh(); } finally { setBusy(false); } };
+  if (live.loading && !live.data) return <><BackButton onClick={() => onNavigate("/admin/threads")} /><LoadingState /></>;
+  if (live.error && !live.data) return <><BackButton onClick={() => onNavigate("/admin/threads")} /><ErrorState message={live.error} retry={live.refresh} /></>;
+  return <><BackButton onClick={() => onNavigate("/admin/threads")} /><SectionHeader eyebrow="Thread detail / 03" title={text(thread.title)} description={text(thread.summary, "No thread summary has been recorded.")} refresh={live.refresh} /><div className="detail-toolbar"><StatusPill value={text(thread.state)} /><span>Priority {numberValue(thread.priority)}</span><span>{numberValue(thread.turnsUsed)} / {numberValue(thread.turnBudget)} turns</span><button className="button button-primary" type="button" disabled={busy} onClick={() => void action("continue")}>{busy ? "Queued…" : "Continue discussion"}</button><button className="button button-quiet" type="button" onClick={() => void action(thread.state === "parked" ? "reopen" : "park")}>{thread.state === "parked" ? "Reopen" : "Park"}</button></div><div className="thread-detail-grid"><Panel title="Canonical conversation" meta={`${messages.length} messages`} className="conversation-panel">{messages.length === 0 ? <EmptyState title="No visible messages." body="WAIT turns and private activity remain in the internal activity rail." /> : <div className="conversation">{messages.map((message) => <article className={`message message-${text(message.author_type, "system")}`} key={text(message.id)}><div className="message-meta"><strong dir="auto">{text(message.author_name, "System")}</strong><span>{dateLabel(message.created_at)}</span></div><TextBlock value={message.content_text} className="message-content" /></article>)}</div>}</Panel><Panel title="Internal activity" meta={`${turns.length} turns`}><div className="compact-list">{turns.map((turn) => <div className="compact-row" key={text(turn.id)}><strong>{text(turn.display_name, "Agent turn")}</strong><span>{text(turn.status)} · {text(turn.wake_reason)} · {dateLabel(turn.created_at)}</span></div>)}</div>{turns.length === 0 && <EmptyState title="No turn telemetry." body="The runtime has not recorded a turn for this thread." />}</Panel><Panel title="Decisions, files, and directives"><div className="compact-list">{arrayValue(data.decisions).map((item) => <div className="compact-row" key={text(item.id)}><strong>Decision</strong><span dir="auto">{text(item.title, text(item.summary))}</span></div>)}{arrayValue(data.files).map((item) => <div className="compact-row" key={text(item.id)}><strong>File</strong><span dir="auto">{text(item.logicalPath)}</span></div>)}{arrayValue(data.godDirectives).map((item) => <div className="compact-row" key={text(item.id)}><strong>GOD directive</strong><span dir="auto">{text(item.directive)}</span></div>)}</div></Panel></div></>;
+}
+
+function FilesPage({ csrf, onNavigate, runMutation }: { readonly csrf: string; readonly onNavigate: (path: string) => void; readonly runMutation: (path: string, init: RequestInit) => Promise<void> }) {
+  const [tab, setTab] = useState<"files" | "knowledge">("files"); const [search, setSearch] = useState(""); const [submitted, setSubmitted] = useState(""); const files = useEndpoint<RecordValue>(tab === "files" ? `/api/admin/files?limit=100${submitted ? `&search=${encodeURIComponent(submitted)}` : ""}` : null, csrf); const knowledge = useEndpoint<RecordValue>(tab === "knowledge" ? "/api/admin/knowledge" : null, csrf); const [newPath, setNewPath] = useState(""); const [newTitle, setNewTitle] = useState(""); const [newContent, setNewContent] = useState("");
+  const create = async () => { await runMutation("/api/admin/files", { method: "POST", body: JSON.stringify({ logicalPath: newPath, title: newTitle, contentMarkdown: newContent }) }); setNewPath(""); setNewTitle(""); setNewContent(""); files.refresh(); };
+  const fileItems = arrayValue(record(files.data).items); const sourceItems = arrayValue(record(knowledge.data).items);
+  return <><SectionHeader eyebrow="Institutional memory / 04" title="Files & Knowledge" description="D1-backed Markdown workspaces and the twelve official LUMA sources. No server filesystem is required." refresh={tab === "files" ? files.refresh : knowledge.refresh} /><div className="subnav"><button className={tab === "files" ? "is-selected" : ""} type="button" onClick={() => setTab("files")}>Files</button><button className={tab === "knowledge" ? "is-selected" : ""} type="button" onClick={() => setTab("knowledge")}>Knowledge</button></div>{tab === "files" ? <><div className="search-bar"><label htmlFor="file-search">Search memory</label><input id="file-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Persian, English, or mixed terms" onKeyDown={(event) => { if (event.key === "Enter") setSubmitted(search); }} /><button className="button button-quiet" type="button" onClick={() => setSubmitted(search)}>Search</button></div><Panel title="Create a Markdown document" meta="operator action"><div className="form-grid"><label>Logical path<input value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="/shared/ideas/example.md" /></label><label>Title<input value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Document title" /></label><label className="full-span">Markdown content<textarea value={newContent} onChange={(event) => setNewContent(event.target.value)} /></label></div><button className="button button-primary" type="button" disabled={!newPath || !newTitle} onClick={() => void create()}>Create document</button></Panel>{files.loading && !files.data ? <LoadingState /> : files.error && !files.data ? <ErrorState message={files.error} retry={files.refresh} /> : fileItems.length === 0 ? <EmptyState title="No files match this view." body="Deleted documents stay out of normal retrieval. Search or create a durable note when useful." /> : <div className="file-list">{fileItems.map((file) => <button className="file-row" type="button" key={text(file.id)} onClick={() => onNavigate(`/admin/files/${String(file.id)}`)}><div><strong dir="auto">{text(file.title)}</strong><span>{text(file.logicalPath)}</span></div><div><span>{text(file.scope, text(file.sourceType))}</span><span>{relativeDate(file.updatedAt)}</span></div></button>)}</div>}</> : <KnowledgeList csrf={csrf} items={sourceItems} loading={knowledge.loading} error={knowledge.error} retry={knowledge.refresh} runMutation={runMutation} onNavigate={onNavigate} />}</>;
+}
+
+function KnowledgeList({ csrf, items, loading, error, retry, runMutation, onNavigate }: { readonly csrf: string; readonly items: readonly RecordValue[]; readonly loading: boolean; readonly error: string | null; readonly retry: () => void; readonly runMutation: (path: string, init: RequestInit) => Promise<void>; readonly onNavigate: (path: string) => void }) {
+  if (loading && items.length === 0) return <LoadingState label="Reading official sources" />;
+  if (error && items.length === 0) return <ErrorState message={error} retry={retry} />;
+  return <div className="source-list">{items.length === 0 ? <EmptyState title="No knowledge sources are configured." body="The official source allowlist is empty in this environment." /> : items.map((source) => <div className="source-row" key={text(source.id)}><div><strong dir="auto">{text(source.title)}</strong><a href={text(source.uri, "#")} target="_blank" rel="noreferrer">{text(source.uri)}</a></div><div className="source-status"><StatusPill value={text(source.status)} /><span>{numberValue(source.chunkCount)} chunks</span><span>{relativeDate(source.lastSuccessfulFetchAt)}</span><button className="text-button" type="button" onClick={() => void runMutation(`/api/admin/knowledge/${encodeURIComponent(text(source.canonicalKey))}/refresh`, { method: "POST", body: "{}" })}>Queue refresh</button><button className="text-button" type="button" onClick={() => onNavigate(`/admin/files/knowledge-${String(source.id)}`)}>Inspect</button></div></div>)}</div>;
+}
+
+function FileDetail({ csrf, fileId, onNavigate, runMutation }: { readonly csrf: string; readonly fileId: string; readonly onNavigate: (path: string) => void; readonly runMutation: (path: string, init: RequestInit) => Promise<void> }) {
+  const live = useEndpoint<RecordValue>(fileId.startsWith("knowledge-") ? `/api/admin/knowledge/${encodeURIComponent(fileId.slice(9))}` : `/api/admin/files/${encodeURIComponent(fileId)}`, csrf); const data = record(live.data); const document = record(data.document); const version = record(data.currentVersion); const [editing, setEditing] = useState(false); const [content, setContent] = useState(""); useEffect(() => { if (live.data) setContent(text(version.contentMarkdown, "")); }, [live.data]);
+  if (live.loading && !live.data) return <><BackButton onClick={() => onNavigate("/admin/files")} /><LoadingState /></>;
+  if (live.error && !live.data) return <><BackButton onClick={() => onNavigate("/admin/files")} /><ErrorState message={live.error} retry={live.refresh} /></>;
+  if (fileId.startsWith("knowledge-")) return <><BackButton onClick={() => onNavigate("/admin/files")} /><SectionHeader eyebrow="Official source / 04" title={text(data.title, text(data.documentTitle))} description={text(data.uri)} /><Panel title="Knowledge chunks" meta={`${arrayValue(data.chunks).length} loaded`}><div className="chunk-list">{arrayValue(data.chunks).map((chunk) => <article className="chunk" key={text(chunk.id)}><strong dir="auto">{text(chunk.heading, text(chunk.title))}</strong><TextBlock value={chunk.contentMarkdown ?? chunk.content_text} /></article>)}</div></Panel></>;
+  const deleteFile = async () => { if (!window.confirm("Soft-delete this document? Its revisions remain recoverable.")) return; await runMutation(`/api/admin/files/${encodeURIComponent(fileId)}`, { method: "DELETE" }); live.refresh(); };
+  const restoreFile = async () => { await runMutation(`/api/admin/files/${encodeURIComponent(fileId)}/restore`, { method: "POST", body: "{}" }); live.refresh(); };
+  const save = async () => { await runMutation(`/api/admin/files/${encodeURIComponent(fileId)}`, { method: "PATCH", body: JSON.stringify({ contentMarkdown: content, changeSummary: "Admin Observatory edit" }) }); setEditing(false); live.refresh(); };
+  return <><BackButton onClick={() => onNavigate("/admin/files")} /><SectionHeader eyebrow="Document detail / 04" title={text(document.title)} description={text(document.logicalPath)} refresh={live.refresh} /><div className="detail-toolbar"><span>{text(document.scope)} · version {numberValue(document.currentVersion)}</span>{document.deletedAt ? <button className="button button-primary" type="button" onClick={() => void restoreFile()}>Restore</button> : <><button className="button button-quiet" type="button" onClick={() => setEditing((value) => !value)}>{editing ? "Close editor" : "Edit"}</button><button className="button button-danger" type="button" onClick={() => void deleteFile()}>Soft delete</button></>}</div><Panel title={editing ? "Edit Markdown" : "Current revision"} meta={dateLabel(version.createdAt)}>{editing ? <><textarea className="large-editor" value={content} onChange={(event) => setContent(event.target.value)} /><button className="button button-primary" type="button" onClick={() => void save()}>Save new revision</button></> : <TextBlock value={version.contentMarkdown} className="document-body" />}</Panel><Panel title="Revision history" meta={`${arrayValue(data.versions).length} immutable versions`}><div className="compact-list">{arrayValue(data.versions).map((item) => <div className="compact-row" key={text(item.id)}><strong>v{numberValue(item.versionNumber)}</strong><span>{dateLabel(item.createdAt)} · {text(item.changeSummary, "No change summary")}</span></div>)}</div></Panel></>;
+}
+
+function HumanTasksPage({ csrf, runMutation }: { readonly csrf: string; readonly runMutation: (path: string, init: RequestInit) => Promise<void> }) {
+  const [status, setStatus] = useState("open"); const live = useEndpoint<RecordValue>(`/api/admin/human-tasks?status=${status}&limit=100`, csrf); const items = arrayValue(record(live.data).items); const resolve = async (id: string) => { await runMutation(`/api/admin/human-tasks/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status: "completed", resolution: "Resolved by operator in Observatory" }) }); live.refresh(); };
+  return <><SectionHeader eyebrow="Human attention / 05" title="Human Tasks" description="Concrete requests for judgment, information, approval, or intervention. Nothing here is fabricated." refresh={live.refresh} /><div className="filter-bar"><label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="open">Open</option><option value="blocked">Blocked</option><option value="completed">Resolved</option></select></label></div>{live.loading && !live.data ? <LoadingState /> : live.error && !live.data ? <ErrorState message={live.error} retry={live.refresh} /> : items.length === 0 ? <EmptyState title={status === "open" ? "Nothing is waiting on the operator." : "No tasks in this state."} body="The organization only creates a task when it needs a concrete human response." /> : <div className="task-list">{items.map((task) => <article className="task-card" key={text(task.id)}><div className="task-card-head"><StatusPill value={text(task.status)} /><span>priority {numberValue(task.priority)}</span><time>{relativeDate(task.createdAt)}</time></div><h2 dir="auto">{text(task.title)}</h2><TextBlock value={task.description} /> <div className="task-card-foot"><span>{text(task.requesterName, "Agent request")}</span>{text(task.status) !== "completed" && <button className="button button-primary" type="button" onClick={() => void resolve(text(task.id))}>Mark resolved</button>}</div></article>)}</div>}</>;
+}
+
+function ReputationPage({ csrf, onNavigate }: { readonly csrf: string; readonly onNavigate: (path: string) => void }) {
+  const [domain, setDomain] = useState(""); const live = useEndpoint<RecordValue>(`/api/admin/reputation${domain ? `?domain=${encodeURIComponent(domain)}` : ""}`, csrf); const items = arrayValue(record(live.data).items); const domains = [...new Set(items.map((item) => text(item.domain, "")).filter(Boolean))];
+  return <><SectionHeader eyebrow="Evidence / 06" title="Reputation" description="Slow, domain-specific influence built from inspectable evidence—not volume, popularity, or message count." refresh={live.refresh} /><div className="filter-bar"><label>Domain<select value={domain} onChange={(event) => setDomain(event.target.value)}><option value="">All domains</option>{domains.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div>{live.loading && !live.data ? <LoadingState /> : live.error && !live.data ? <ErrorState message={live.error} retry={live.refresh} /> : items.length === 0 ? <EmptyState title="No reputation evidence in this view." body="All normal Agents begin neutral. Declared specialty is not a score." /> : <div className="reputation-table"><div className="table-head"><span>Agent</span><span>Domain</span><span>Rank</span><span>Dimensions</span><span>Evidence</span></div>{items.map((item) => <button className="table-row" type="button" key={`${text(item.agentId)}-${text(item.domain)}`} onClick={() => onNavigate(`/admin/reputation/${String(item.agentId)}`)}><strong dir="auto">{text(item.agentName)}</strong><span>{text(item.domain)}</span><b>{numberValue(item.rank, 10).toFixed(1)}</b><span>E {numberValue(item.epistemic).toFixed(2)} · C {numberValue(item.contribution).toFixed(2)} · O {numberValue(item.outcome).toFixed(2)} · K {numberValue(item.collaboration).toFixed(2)}</span><span>{numberValue(item.evidenceCount)} evidence</span></button>)}</div>}</>;
+}
+
+function ReputationDetail({ csrf, agentId, onNavigate }: { readonly csrf: string; readonly agentId: string; readonly onNavigate: (path: string) => void }) {
+  const live = useEndpoint<RecordValue>(`/api/admin/reputation/${encodeURIComponent(agentId)}`, csrf); const data = record(live.data); if (live.loading && !live.data) return <><BackButton onClick={() => onNavigate("/admin/reputation")} /><LoadingState /></>; if (live.error && !live.data) return <><BackButton onClick={() => onNavigate("/admin/reputation")} /><ErrorState message={live.error} retry={live.refresh} /></>; return <><BackButton onClick={() => onNavigate("/admin/reputation")} /><SectionHeader eyebrow="Reputation detail / 06" title={text(data.agentName)} description="Every movement remains explainable through domain state, evidence, and versioned snapshots." refresh={live.refresh} /><Panel title="Domain state" meta="four dimensions"><div className="dimension-grid">{arrayValue(data.states).map((state) => <div className="dimension-card" key={text(state.domain)}><h2>{text(state.domain)}</h2><strong>{numberValue(state.rank, 10).toFixed(1)}</strong><p>E {numberValue(state.epistemic).toFixed(2)} · C {numberValue(state.contribution).toFixed(2)} · O {numberValue(state.outcome).toFixed(2)} · K {numberValue(state.collaboration).toFixed(2)}</p></div>)}</div></Panel><Panel title="Evidence history" meta={`${arrayValue(data.evidence).length} records`}><div className="compact-list">{arrayValue(data.evidence).map((item) => <div className="compact-row" key={text(item.id)}><strong>{text(item.dimension, text(item.sourceType))}</strong><span>{text(item.signal, text(item.rationale, "No rationale"))} · {dateLabel(item.createdAt ?? item.created_at)}</span></div>)}</div></Panel></>;
+}
+
+function GodPage({ csrf, onNavigate, runMutation }: { readonly csrf: string; readonly onNavigate: (path: string) => void; readonly runMutation: (path: string, init: RequestInit) => Promise<void> }) {
+  const live = useEndpoint<RecordValue>("/api/admin/god", csrf); const data = record(live.data); const reviews = arrayValue(data.reviews); const directives = arrayValue(data.directives); const latest = record(data.latest); const run = async () => { if (!window.confirm("Queue one bounded GOD review? This may incur a provider call.")) return; await runMutation("/api/admin/god/review", { method: "POST", body: "{}" }); live.refresh(); };
+  return <><SectionHeader eyebrow="Supervision / 07" title="GOD" description="A supervisory lens over evidence, risks, directives, and missing perspectives. GOD is not a Rank competitor." refresh={live.refresh} /><div className="detail-toolbar"><span>Provider {text(record(data.configuration).provider, "configured")}</span><span>Model {text(record(data.configuration).model)}</span><span>Telegram transport: gateway</span><button className="button button-primary" type="button" onClick={() => void run()}>Run GOD review</button></div><div className="two-column"><Panel title="Latest review" meta={latest.id ? dateLabel(latest.createdAt) : "No review"}>{latest.id ? <><StatusPill value={text(latest.status)} /><TextBlock value={latest.summary} /><div className="inline-facts"><span>{numberValue(latest.directiveCount)} directives</span><span>{numberValue(latest.evaluationCount)} evaluations</span></div><button className="text-button" type="button" onClick={() => onNavigate(`/admin/god/reviews/${String(latest.id)}`)}>Open full review →</button></> : <EmptyState title="No supervisory review exists." body="The panel represents empty state honestly until a review is persisted." />}</Panel><Panel title="Review history" meta={`${reviews.length} stored`}><div className="compact-list">{reviews.map((review) => <button className="compact-row compact-button" type="button" key={text(review.id)} onClick={() => onNavigate(`/admin/god/reviews/${String(review.id)}`)}><strong>{dateLabel(review.createdAt)}</strong><span>{text(review.status)} · {numberValue(review.directiveCount)} directives · {numberValue(review.evaluationCount)} evaluations</span></button>)}</div></Panel></div><Panel title="Directives" meta={`${directives.length} visible`}><div className="directive-list">{directives.length === 0 ? <EmptyState title="No open directives." body="Completed or dismissed directives remain in review history." /> : directives.map((directive) => <div className="directive-row" key={text(directive.id)}><div><StatusPill value={text(directive.status)} /><strong dir="auto">{text(directive.directive)}</strong><span>{text(directive.agent_name, text(directive.thread_title, "organization"))}</span></div><select value={text(directive.status)} onChange={(event) => void runMutation(`/api/admin/god/directives/${encodeURIComponent(text(directive.id))}`, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) })}><option value="open">open</option><option value="acknowledged">acknowledged</option><option value="completed">completed</option><option value="dismissed">dismissed</option></select></div>)}</div></Panel></>;
+}
+
+function GodReviewDetail({ csrf, reviewId, onNavigate }: { readonly csrf: string; readonly reviewId: string; readonly onNavigate: (path: string) => void }) {
+  const live = useEndpoint<RecordValue>(`/api/admin/god/reviews/${encodeURIComponent(reviewId)}`, csrf); const data = record(live.data); const review = record(data.review); if (live.loading && !live.data) return <><BackButton onClick={() => onNavigate("/admin/god")} /><LoadingState /></>; if (live.error && !live.data) return <><BackButton onClick={() => onNavigate("/admin/god")} /><ErrorState message={live.error} retry={live.refresh} /></>; return <><BackButton onClick={() => onNavigate("/admin/god")} /><SectionHeader eyebrow="Review detail / 07" title="GOD review" description={text(review.summary, "No executive summary recorded.")} refresh={live.refresh} /><div className="two-column"><Panel title="Findings" meta={`${numberValue(review.directiveCount)} directives`}><TextBlock value={JSON.stringify(review.findings, null, 2)} className="document-body" /></Panel><Panel title="Audit metadata"><div className="fact-grid"><Fact label="Status" value={text(review.status)} /><Fact label="Provider" value={text(review.provider)} /><Fact label="Model" value={text(review.model)} /><Fact label="Created" value={dateLabel(review.createdAt)} /><Fact label="Evaluations" value={String(numberValue(review.evaluationCount))} /></div>{numberValue(review.evaluationCount) === 0 && <EmptyState title="This review did not emit Agent evaluations." body="Zero is a valid persisted result; the Observatory does not create placeholders." />}</Panel></div></>;
+}
+
+function SystemPage({ csrf }: { readonly csrf: string }) {
+  const live = useEndpoint<RecordValue>("/api/admin/system", csrf, 0, 25_000); const data = record(live.data); const pressure = record(data.pressure); if (live.loading && !live.data) return <><SectionHeader eyebrow="Operations / 08" title="System" description="Jobs, scheduler, providers, Telegram, knowledge sync, errors, audit, and measurable application pressure." /><LoadingState /></>; if (live.error && !live.data) return <><SectionHeader eyebrow="Operations / 08" title="System" description="Operational data from bounded D1 queries." /><ErrorState message={live.error} retry={live.refresh} /></>; return <><SectionHeader eyebrow="Operations / 08" title="System" description="Operational data from bounded D1 queries. Cron ticks are not confused with model work." refresh={live.refresh} updatedAt={data.generatedAt} /><div className="status-ribbon system-ribbon"><Fact label="Jobs / 24h" value={String(numberValue(pressure.jobsDay))} /><Fact label="Agent turns / 24h" value={String(numberValue(pressure.agentTurnsDay))} /><Fact label="Provider calls / 24h" value={String(numberValue(pressure.providerCallsDay))} /><Fact label="Documents" value={String(numberValue(pressure.documents))} /><Fact label="Knowledge chunks" value={String(numberValue(pressure.knowledgeChunks))} /><Fact label="Cloudflare quota" value="not measured" /></div><div className="system-grid"><Panel title="Providers" meta="aggregated usage"><div className="compact-list">{arrayValue(data.providers).length === 0 ? <EmptyState title="No provider usage records." body="Calls appear after real runtime activity." /> : arrayValue(data.providers).map((item) => <div className="compact-row" key={`${text(item.provider_name)}-${text(item.model_name)}`}><strong>{text(item.provider_name)} · {text(item.model_name)}</strong><span>{numberValue(item.calls)} calls · {numberValue(item.tokens)} tokens · {numberValue(item.average_latency_ms)}ms avg</span></div>)}</div></Panel><Panel title="Jobs" meta="latest 80"><div className="compact-list">{arrayValue(data.jobs).slice(0, 12).map((job) => <div className="compact-row" key={text(job.id)}><strong>{text(job.job_type)}</strong><span><StatusPill value={text(job.status)} /> · {dateLabel(job.created_at)} · {text(job.last_error, "No failure")}</span></div>)}</div></Panel><Panel title="Telegram" meta="application telemetry"><div className="compact-list">{arrayValue(data.telegram).slice(0, 12).map((item) => <div className="compact-row" key={text(item.id)}><strong>{text(item.bot_alias)}</strong><span><StatusPill value={text(item.status)} /> · {text(item.agent_id, "gateway/system")} · {text(item.last_error, "No failure")}</span></div>)}<div className="topology-note">Gateway webhook: 1 · Persona webhooks: 0 · GOD bot: not used</div></div></Panel><Panel title="Recent errors" meta="bounded"><div className="compact-list">{arrayValue(data.errors).length === 0 ? <EmptyState title="No recent operational errors." body="Provider, job, Telegram, and knowledge failures appear here when recorded." /> : arrayValue(data.errors).map((item) => <div className="compact-row" key={text(item.id)}><strong>{text(item.kind)}</strong><span>{text(item.title)} · {text(item.summary)}</span></div>)}</div></Panel><Panel title="Audit" meta="privileged actions"><div className="compact-list">{arrayValue(data.audit).length === 0 ? <EmptyState title="No admin actions yet." body="Login and mutations are recorded without storing submitted secrets." /> : arrayValue(data.audit).map((item) => <div className="compact-row" key={text(item.id)}><strong>{text(item.action)}</strong><span>{text(item.entity_type)}:{text(item.entity_id)} · {dateLabel(item.created_at)}</span></div>)}</div></Panel></div></>;
+}
+
+function SettingsPage({ csrf, runMutation }: { readonly csrf: string; readonly runMutation: (path: string, init: RequestInit) => Promise<void> }) {
+  const live = useEndpoint<RecordValue>("/api/admin/settings", csrf); const items = arrayValue(record(live.data).items); const [draft, setDraft] = useState<Record<string, string>>({}); useEffect(() => { const next: Record<string, string> = {}; for (const item of items) next[text(item.key)] = String(numberValue(item.value)); setDraft(next); }, [live.data]); const save = async (item: RecordValue) => { const key = text(item.key); await runMutation(`/api/admin/settings/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify({ value: Number(draft[key]) }) }); live.refresh(); }; const reset = async (item: RecordValue) => { const key = text(item.key); await runMutation(`/api/admin/settings/${encodeURIComponent(key)}/reset`, { method: "POST", body: "{}" }); live.refresh(); };
+  const configuration = record(record(live.data).configuration);
+  return <><SectionHeader eyebrow="Configuration / 09" title="Settings" description="Safe typed overrides only. Hard runtime ceilings remain enforced in code; secrets are shown as configured/not configured, never as values." refresh={live.refresh} />{live.loading && !live.data ? <LoadingState /> : live.error && !live.data ? <ErrorState message={live.error} retry={live.refresh} /> : <><Panel title="Guarded runtime settings" meta="validated server-side"><div className="settings-list">{items.map((item) => <div className="setting-row" key={text(item.key)}><div><strong>{text(item.label)}</strong><p>{text(item.description)}</p><small>Allowed {numberValue(item.min)}–{numberValue(item.max)} · default {numberValue(item.defaultValue)}</small></div><div className="setting-control"><input type="number" min={numberValue(item.min)} max={numberValue(item.max)} value={draft[text(item.key)] ?? ""} onChange={(event) => setDraft({ ...draft, [text(item.key)]: event.target.value })} /><button className="button button-quiet" type="button" onClick={() => void save(item)}>Save</button><button className="text-button" type="button" onClick={() => void reset(item)}>Reset</button></div></div>)}</div></Panel><Panel title="Secret status" meta="values are never returned"><div className="secret-status"><span>Telegram credentials <b>{configuration.telegramConfigured === true ? "configured" : "not configured"}</b></span><span>Nebula provider <b>{configuration.nebulaConfigured === true ? "configured" : "not configured"}</b></span><span>GOD provider <b>{configuration.godConfigured === true ? "configured" : "not configured"}</b></span><span>Admin authentication <b>{configuration.adminConfigured === true ? "configured" : "not configured"}</b></span></div></Panel></>}</>;
+}
+
+function Observatory({ csrf, onLogout }: { readonly csrf: string; readonly onLogout: () => void }) {
+  const [pathname, setPathname] = useState(window.location.pathname); const [mobileNav, setMobileNav] = useState(false); const [notice, setNotice] = useState<string | null>(null); const route = useMemo(() => routeFor(pathname), [pathname]);
+  const navigate = useCallback((path: string) => { window.history.pushState({}, "", path); setPathname(path); setMobileNav(false); window.scrollTo({ top: 0, behavior: "smooth" }); }, []);
+  useEffect(() => { const handler = () => setPathname(window.location.pathname); window.addEventListener("popstate", handler); return () => window.removeEventListener("popstate", handler); }, []);
+  const runMutation = useCallback(async (path: string, init: RequestInit) => { try { await requestJson(path, init, csrf); setNotice("Change saved."); window.setTimeout(() => setNotice(null), 2600); } catch (cause: unknown) { setNotice(cause instanceof Error ? cause.message : "Change failed."); throw cause; } }, [csrf]);
+  const page = route.id && route.section === "agents" ? <AgentDetail csrf={csrf} agentId={route.id} onNavigate={navigate} runMutation={runMutation} /> : route.id && route.section === "threads" ? <ThreadDetail csrf={csrf} threadId={route.id} onNavigate={navigate} runMutation={runMutation} /> : route.id && route.section === "files" ? <FileDetail csrf={csrf} fileId={route.id} onNavigate={navigate} runMutation={runMutation} /> : route.id && route.section === "reputation" ? <ReputationDetail csrf={csrf} agentId={route.id} onNavigate={navigate} /> : route.id === "reviews" && route.sub && route.section === "god" ? <GodReviewDetail csrf={csrf} reviewId={route.sub} onNavigate={navigate} /> : route.section === "strategy-room" ? <StrategyRoom csrf={csrf} onNavigate={navigate} runMutation={runMutation} /> : route.section === "agents" ? <AgentsPage csrf={csrf} onNavigate={navigate} /> : route.section === "threads" ? <ThreadsPage csrf={csrf} onNavigate={navigate} /> : route.section === "files" ? <FilesPage csrf={csrf} onNavigate={navigate} runMutation={runMutation} /> : route.section === "human-tasks" ? <HumanTasksPage csrf={csrf} runMutation={runMutation} /> : route.section === "reputation" ? <ReputationPage csrf={csrf} onNavigate={navigate} /> : route.section === "god" ? <GodPage csrf={csrf} onNavigate={navigate} runMutation={runMutation} /> : route.section === "system" ? <SystemPage csrf={csrf} /> : <SettingsPage csrf={csrf} runMutation={runMutation} />;
+  return <div className="app-shell"><a className="skip-link" href="#main-content">Skip to content</a>{mobileNav && <button className="mobile-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileNav(false)} /> }<aside className={`sidebar ${mobileNav ? "is-open" : ""}`} aria-label="Primary navigation"><div className="brand-lockup"><span className="brand-symbol" aria-hidden="true">L</span><div><strong>LUMA <i>ADHD</i></strong><small>organization observatory</small></div></div><div className="sidebar-rule" /><p className="nav-label">Navigate</p><nav className="nav-list">{NAV_ITEMS.map((item) => <button className={`nav-item ${route.section === item.id && !route.id ? "is-active" : ""}`} type="button" key={item.id} onClick={() => navigate(`/admin/${item.id}`)}><span>{item.code}</span><strong>{item.label}</strong>{route.section === item.id && !route.id && <i aria-hidden="true" />}</button>)}</nav><div className="sidebar-footer"><span className="live-dot" />Phase 06 / Admin Observatory<p>Real state. Bounded control.</p><button className="logout-button" type="button" onClick={onLogout}>Log out</button></div></aside><main id="main-content" className="main-content"><header className="topbar"><button className="mobile-menu" type="button" onClick={() => setMobileNav(true)} aria-label="Open navigation">☰</button><div className="breadcrumb"><span>LUMA ADHD</span><i>/</i><span>Observatory</span>{route.id && <><i>/</i><span>{route.id}</span></>}</div><div className="topbar-status"><span className="live-dot" />Live D1 surface</div></header><div className="page-frame">{page}</div></main>{notice && <div className="toast" role="status">{notice}</div>}</div>;
+}
+
+export default function App() {
+  const [csrf, setCsrf] = useState<string | null>(null); const [checking, setChecking] = useState(true);
+  const bootstrap = useCallback(async () => { try { const payload = await requestJson<RecordValue>("/api/admin/auth/bootstrap"); const token = payload.csrfToken; if (typeof token === "string") { window.history.replaceState({}, "", "/admin"); setCsrf(token); } } catch { setCsrf(null); } finally { setChecking(false); } }, []);
+  useEffect(() => { void bootstrap(); }, [bootstrap]);
+  const logout = async () => { if (!csrf) return; try { await requestJson("/api/admin/auth/logout", { method: "POST", body: "{}" }, csrf); } finally { setCsrf(null); } };
+  if (checking) return <LoadingState label="Opening private observatory" />;
+  return csrf ? <Observatory csrf={csrf} onLogout={() => void logout()} /> : <Login onAuthenticated={(token) => { window.history.replaceState({}, "", "/admin"); setCsrf(token); }} />;
+}

@@ -1,8 +1,8 @@
 import type { createRepositories } from "../database/repositories";
 import { nowIso } from "../database/ids";
-import { FOUNDATION_GUARDRAILS } from "../guardrails";
 import type { AgentJobMessage } from "../jobs";
 import type { JobRecord } from "../database/types";
+import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 
 type SchedulerRepositories = ReturnType<typeof createRepositories>;
 
@@ -13,6 +13,7 @@ export interface AgentJobQueue {
 export interface AgentSchedulerDependencies {
   readonly repositories: SchedulerRepositories;
   readonly queue: AgentJobQueue;
+  readonly runtimeSettings?: EffectiveRuntimeSettings;
   readonly now?: () => string;
   readonly rng?: () => number;
 }
@@ -41,22 +42,27 @@ function hoursSince(asOf: string, earlier: string): number {
 export class AgentScheduler {
   private readonly now: () => string;
   private readonly rng: () => number;
+  private readonly runtimeSettings: Promise<EffectiveRuntimeSettings>;
 
   constructor(private readonly dependencies: AgentSchedulerDependencies) {
     this.now = dependencies.now ?? nowIso;
     this.rng = dependencies.rng ?? Math.random;
+    this.runtimeSettings = dependencies.runtimeSettings
+      ? Promise.resolve(dependencies.runtimeSettings)
+      : loadEffectiveRuntimeSettings(dependencies.repositories.database).catch(() => DEFAULT_RUNTIME_SETTINGS);
   }
 
   async tick(): Promise<SchedulerTickResult> {
     const asOf = this.now();
-    const enqueued = await this.enqueueDueJobs(asOf);
+    const settings = await this.runtimeSettings;
+    const enqueued = await this.enqueueDueJobs(asOf, settings.schedulerWorkPerTick);
     let schedule = await this.dependencies.repositories.scheduledJobs.getByKey(SCHEDULE_KEY).catch(() => null);
     if (!schedule) {
       schedule = await this.dependencies.repositories.scheduledJobs.upsert({
         scheduleKey: SCHEDULE_KEY,
         jobType: "scheduler.ambient_tick",
         scheduleExpression: SCHEDULE_EXPRESSION,
-        payload: { source: "cron", intervalMinutes: FOUNDATION_GUARDRAILS.ambientOpportunityIntervalMinutes },
+        payload: { source: "cron", intervalMinutes: settings.ambientOpportunityIntervalMinutes },
         nextRunAt: asOf,
       });
     }
@@ -72,14 +78,14 @@ export class AgentScheduler {
     const threads = await this.dependencies.repositories.threads.listActive(50);
     const candidates = threads
       .map((thread) => ({ thread, inactiveHours: hoursSince(asOf, thread.lastActivityAt) }))
-      .filter(({ inactiveHours }) => inactiveHours >= FOUNDATION_GUARDRAILS.ambientOpportunityIntervalMinutes / 60)
+      .filter(({ inactiveHours }) => inactiveHours >= settings.ambientOpportunityIntervalMinutes / 60)
       .sort((left, right) => right.inactiveHours - left.inactiveHours || right.thread.priority - left.thread.priority)
-      .slice(0, FOUNDATION_GUARDRAILS.schedulerWorkPerTick);
-    const slot = Math.floor(Date.parse(asOf) / (FOUNDATION_GUARDRAILS.ambientOpportunityIntervalMinutes * 60_000));
+      .slice(0, settings.schedulerWorkPerTick);
+    const slot = Math.floor(Date.parse(asOf) / (settings.ambientOpportunityIntervalMinutes * 60_000));
     let ambientJobsCreated = 0;
     let inactivityRecovery = false;
     for (const candidate of candidates) {
-      const recovery = candidate.inactiveHours >= FOUNDATION_GUARDRAILS.inactivityRecoveryHours;
+      const recovery = candidate.inactiveHours >= settings.inactivityRecoveryHours;
       inactivityRecovery ||= recovery;
       const job = await this.dependencies.repositories.jobs.create({
         jobType: "agent.ambient",
@@ -102,7 +108,7 @@ export class AgentScheduler {
     const jitterMinutes = Math.floor(Math.max(0, Math.min(1, this.rng())) * 30);
     await this.dependencies.repositories.scheduledJobs.markEnqueued(
       SCHEDULE_KEY,
-      asOfPlusMinutes(asOf, FOUNDATION_GUARDRAILS.ambientOpportunityIntervalMinutes + jitterMinutes),
+      asOfPlusMinutes(asOf, settings.ambientOpportunityIntervalMinutes + jitterMinutes),
       asOf,
     );
 
@@ -114,8 +120,9 @@ export class AgentScheduler {
     };
   }
 
-  async enqueueDueJobs(asOf = this.now(), limit = FOUNDATION_GUARDRAILS.schedulerWorkPerTick): Promise<number> {
-    const jobs = await this.dependencies.repositories.jobs.listDueToEnqueue(asOf, limit);
+  async enqueueDueJobs(asOf = this.now(), limit?: number): Promise<number> {
+    const effectiveLimit = limit ?? (await this.runtimeSettings).schedulerWorkPerTick;
+    const jobs = await this.dependencies.repositories.jobs.listDueToEnqueue(asOf, effectiveLimit);
     let count = 0;
     for (const job of jobs) {
       await this.enqueueJob(job, asOf);

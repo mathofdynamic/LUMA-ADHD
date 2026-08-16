@@ -1,12 +1,14 @@
 import type { createRepositories } from "../database/repositories";
 import { nowIso } from "../database/ids";
 import type { AgentJobMessage } from "../jobs";
+import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 
 type ReputationRepositories = ReturnType<typeof createRepositories>;
 
 export interface ReputationSchedulerDependencies {
   readonly repositories: ReputationRepositories;
   readonly queue: { send(message: AgentJobMessage): Promise<unknown> };
+  readonly runtimeSettings?: EffectiveRuntimeSettings;
   readonly now?: () => string;
 }
 
@@ -26,13 +28,18 @@ function nextUtcDay(asOf: string): string {
 
 export class ReputationScheduler {
   private readonly now: () => string;
+  private readonly runtimeSettings: Promise<EffectiveRuntimeSettings>;
 
   constructor(private readonly dependencies: ReputationSchedulerDependencies) {
     this.now = dependencies.now ?? nowIso;
+    this.runtimeSettings = dependencies.runtimeSettings
+      ? Promise.resolve(dependencies.runtimeSettings)
+      : loadEffectiveRuntimeSettings(dependencies.repositories.database).catch(() => DEFAULT_RUNTIME_SETTINGS);
   }
 
   async tick(): Promise<ReputationSchedulerTickResult> {
     const asOf = this.now();
+    const settings = await this.runtimeSettings;
     let schedule = await this.dependencies.repositories.scheduledJobs.getByKey(SCHEDULE_KEY).catch(() => null);
     if (!schedule) {
       schedule = await this.dependencies.repositories.scheduledJobs.upsert({
@@ -58,7 +65,10 @@ export class ReputationScheduler {
       await this.dependencies.queue.send({ kind: "agent.job", jobId: job.id, depth: job.chainDepth, createdAt: asOf });
       await this.dependencies.repositories.jobs.markEnqueued(job.id, asOf);
     }
-    await this.dependencies.repositories.scheduledJobs.markEnqueued(SCHEDULE_KEY, nextUtcDay(asOf), asOf);
+    const nextRunAt = settings.reputationCalculationCadenceHours === 24
+      ? nextUtcDay(asOf)
+      : new Date(Date.parse(asOf) + settings.reputationCalculationCadenceHours * 60 * 60 * 1000).toISOString();
+    await this.dependencies.repositories.scheduledJobs.markEnqueued(SCHEDULE_KEY, nextRunAt, asOf);
     return { due: true, jobsCreated: 1 };
   }
 }

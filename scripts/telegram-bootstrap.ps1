@@ -95,6 +95,39 @@ function Invoke-Telegram(
   return $parsed
 }
 
+function Set-RuntimeConfigurationVariable(
+  [string]$Configuration,
+  [string]$Key,
+  [string]$Value
+) {
+  $lines = $Configuration -split "`r?`n"
+  $propertyPattern = '^\s*"' + [regex]::Escape($Key) + '"\s*:'
+  $replacement = '    "' + $Key + '": "' + $Value + '",'
+  $found = $false
+  for ($index = 0; $index -lt $lines.Count; $index += 1) {
+    if ($lines[$index] -match $propertyPattern) {
+      $lines[$index] = $replacement
+      $found = $true
+      break
+    }
+  }
+
+  if (-not $found) {
+    $insertAt = -1
+    for ($index = 0; $index -lt $lines.Count; $index += 1) {
+      if ($lines[$index] -match '^\s*"NEBULA_BASE_URL"\s*:') {
+        $insertAt = $index
+        break
+      }
+    }
+    if ($insertAt -lt 0) {
+      throw "Unable to add runtime variable $Key to Wrangler configuration"
+    }
+    $lines = @($lines[0..($insertAt - 1)] + $replacement + $lines[$insertAt..($lines.Count - 1)])
+  }
+  return ($lines -join [Environment]::NewLine)
+}
+
 $identities = [ordered]@{}
 foreach ($alias in $mapping.Keys) {
   $entry = $mapping[$alias]
@@ -151,18 +184,9 @@ if ($Deploy) {
       '"LUMA_ENVIRONMENT": "local"',
       '"LUMA_ENVIRONMENT": "production"'
     )
-    $runtimeConfig = $runtimeConfig.Replace(
-      '"TELEGRAM_GROUP_ID": ""',
-      ('"TELEGRAM_GROUP_ID": "' + $GroupId + '"')
-    )
-    $runtimeConfig = $runtimeConfig.Replace(
-      '"TELEGRAM_ADMIN_USER_IDS": ""',
-      ('"TELEGRAM_ADMIN_USER_IDS": "' + $ownerId + '"')
-    )
-    $runtimeConfig = $runtimeConfig.Replace(
-      '"TELEGRAM_BOT_IDENTITIES_JSON": "{}"',
-      ('"TELEGRAM_BOT_IDENTITIES_JSON": "' + $escapedIdentityJson + '"')
-    )
+    $runtimeConfig = Set-RuntimeConfigurationVariable $runtimeConfig 'TELEGRAM_GROUP_ID' $GroupId
+    $runtimeConfig = Set-RuntimeConfigurationVariable $runtimeConfig 'TELEGRAM_ADMIN_USER_IDS' $ownerId
+    $runtimeConfig = Set-RuntimeConfigurationVariable $runtimeConfig 'TELEGRAM_BOT_IDENTITIES_JSON' $escapedIdentityJson
     if (
       -not $runtimeConfig.Contains('"TELEGRAM_GROUP_ID": "' + $GroupId + '"') -or
       -not $runtimeConfig.Contains('"TELEGRAM_ADMIN_USER_IDS": "' + $ownerId + '"') -or
@@ -222,18 +246,9 @@ if ($InstallGatewayWebhook) {
       '"LUMA_ENVIRONMENT": "local"',
       '"LUMA_ENVIRONMENT": "production"'
     )
-    $runtimeConfig = $runtimeConfig.Replace(
-      '"TELEGRAM_GROUP_ID": ""',
-      ('"TELEGRAM_GROUP_ID": "' + $GroupId + '"')
-    )
-    $runtimeConfig = $runtimeConfig.Replace(
-      '"TELEGRAM_ADMIN_USER_IDS": ""',
-      ('"TELEGRAM_ADMIN_USER_IDS": "' + $ownerId + '"')
-    )
-    $runtimeConfig = $runtimeConfig.Replace(
-      '"TELEGRAM_BOT_IDENTITIES_JSON": "{}"',
-      ('"TELEGRAM_BOT_IDENTITIES_JSON": "' + $escapedIdentityJson + '"')
-    )
+    $runtimeConfig = Set-RuntimeConfigurationVariable $runtimeConfig 'TELEGRAM_GROUP_ID' $GroupId
+    $runtimeConfig = Set-RuntimeConfigurationVariable $runtimeConfig 'TELEGRAM_ADMIN_USER_IDS' $ownerId
+    $runtimeConfig = Set-RuntimeConfigurationVariable $runtimeConfig 'TELEGRAM_BOT_IDENTITIES_JSON' $escapedIdentityJson
     if (
       -not $runtimeConfig.Contains('"TELEGRAM_GROUP_ID": "' + $GroupId + '"') -or
       -not $runtimeConfig.Contains('"TELEGRAM_ADMIN_USER_IDS": "' + $ownerId + '"') -or

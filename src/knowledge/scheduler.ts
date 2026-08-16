@@ -1,8 +1,8 @@
 import type { createRepositories } from "../database/repositories";
 import { nowIso } from "../database/ids";
-import { FOUNDATION_GUARDRAILS } from "../guardrails";
 import type { AgentJobQueue } from "../agents/scheduler";
 import { OFFICIAL_LUMA_SOURCES } from "./sources";
+import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 
 type Repositories = ReturnType<typeof createRepositories>;
 
@@ -22,12 +22,15 @@ export class KnowledgeScheduler {
     private readonly repositories: Repositories,
     private readonly queue: AgentJobQueue,
     private readonly now: () => string = nowIso,
+    private readonly configuredSettings?: EffectiveRuntimeSettings,
   ) {}
 
   async tick(): Promise<KnowledgeSchedulerResult> {
     await this.repositories.knowledgeSources.ensureOfficialSources(OFFICIAL_LUMA_SOURCES);
     const asOf = this.now();
-    const due = await this.repositories.knowledgeSources.listDue(asOf, Math.min(1, FOUNDATION_GUARDRAILS.schedulerWorkPerTick));
+    const settings = this.configuredSettings
+      ?? await loadEffectiveRuntimeSettings(this.repositories.database).catch(() => DEFAULT_RUNTIME_SETTINGS);
+    const due = await this.repositories.knowledgeSources.listDue(asOf, Math.min(1, settings.schedulerWorkPerTick));
     let jobsCreated = 0;
     const slot = Math.floor(Date.parse(asOf) / (15 * 60_000));
     for (const source of due) {
@@ -44,7 +47,8 @@ export class KnowledgeScheduler {
         await this.queue.send({ kind: "agent.job", jobId: job.id, depth: job.chainDepth, createdAt: asOf });
         await this.repositories.jobs.markEnqueued(job.id, asOf);
         await this.repositories.knowledgeSources.updateSyncState({
-          sourceId: source.id, status: "stale", attemptedAt: asOf, nextRefreshAt: plusMinutes(asOf, 15), errorSummary: null,
+          sourceId: source.id, status: "stale", attemptedAt: asOf,
+          nextRefreshAt: plusMinutes(asOf, settings.knowledgeSyncCadenceHours * 60), errorSummary: null,
         });
         jobsCreated += 1;
       }
