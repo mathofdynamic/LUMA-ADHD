@@ -31,6 +31,7 @@ import {
 import type { TelegramApplicationService } from "../telegram";
 import { ContextPackService } from "../memory/retrieval";
 import type { MemoryServices } from "../memory";
+import type { ReputationService } from "../reputation/service";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
@@ -40,6 +41,7 @@ export interface AgentRuntimeDependencies {
   readonly telegram?: Pick<TelegramApplicationService, "projectAgentMessage">;
   readonly modelKey: string;
   readonly memory?: MemoryServices;
+  readonly reputation?: ReputationService;
   readonly now?: () => string;
   readonly rng?: () => number;
 }
@@ -289,9 +291,12 @@ export class AgentRuntimeService {
         addressedAgentId: input.addressedAgentId,
         requestedAgentIds: requested,
         recentAgentIds,
-        reputationByAgentId: Object.fromEntries(
-          profiles.map((profile) => [profile.agent.id, (profile.agent.rank - 10) / 10]),
-        ),
+        reputationByAgentId: {
+          ...Object.fromEntries(profiles.map((profile) => [profile.agent.id, (profile.agent.rank - 10) / 10])),
+          ...(this.dependencies.reputation
+            ? await this.dependencies.reputation.selectionSignals(profiles.map((profile) => profile.agent.id))
+            : {}),
+        },
         turnIndex: turnCount,
         rng: this.rng,
       });
@@ -505,7 +510,9 @@ export class AgentRuntimeService {
         ...(human ? [{ id: human.id, displayName: human.displayName, kind: "human" as const }] : []),
       ],
       humanDisplayName: human?.displayName,
-      reputationContext: { globalRank: agent.rank },
+      reputationContext: {
+        trackRecord: agent.rank >= 12 ? "strong relevant track record" : agent.rank <= 8 ? "recent evidence concern" : "limited or neutral evidence",
+      },
       retrievedContext: contextPack ? ContextPackService.toPromptText(contextPack) : undefined,
     });
 

@@ -185,7 +185,7 @@ export class TelegramInboundService {
       update,
       repliedMessage?.authorAgentId ?? null,
     );
-    if (addressedAgentId === null && update.replyTo?.senderTelegramUserId !== undefined) {
+    if (!repliedMessage && addressedAgentId === null && update.replyTo?.senderTelegramUserId !== undefined) {
       addressedAgentId = await this.dependencies.repositories.telegramIdentities.findAgentByTelegramUserId(
         update.replyTo.senderTelegramUserId,
       );

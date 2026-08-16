@@ -25,7 +25,7 @@ export interface AgentPromptContext {
   readonly requestedAgentIds?: readonly string[];
   readonly participants?: readonly PromptParticipant[];
   readonly humanDisplayName?: string | null;
-  readonly reputationContext?: Readonly<Record<string, number>>;
+  readonly reputationContext?: Readonly<Record<string, string | number>>;
   readonly memoryContext?: readonly string[];
   readonly fileContext?: readonly string[];
   readonly retrievedContext?: string;
@@ -101,7 +101,7 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
   const interests = context.interests.map((item) => item.interest);
   const reputation = context.reputationContext
     ? JSON.stringify(context.reputationContext)
-    : "No reputation signal is available in Phase 03.";
+    : "No coarse reputation signal is available.";
   const memory = compactList(context.memoryContext ?? [], 4);
   const files = compactList(context.fileContext ?? [], 4);
   const participantText = participants

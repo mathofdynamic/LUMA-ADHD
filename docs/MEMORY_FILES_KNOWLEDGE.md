@@ -8,7 +8,7 @@ Documents are addressed by canonical logical paths, not operating-system paths:
 
 - `/agents/product/` through `/agents/heretic/` — agent-owned Markdown workspaces.
 - `/shared/ideas/`, `/shared/research/`, `/shared/decisions/`, `/shared/experiments/`, `/shared/human-requests/` — shared institutional work.
-- `/god/reviews/` — reserved for the seeded GOD identity; GOD execution remains deferred.
+- `/god/reviews/` — reserved for the seeded `agent-god` identity; Phase 05 writes completed provider-neutral GOD reviews here when a verified provider is configured.
 - `/threads/<thread-id>/` — thread-scoped documents when a future caller supplies the matching thread.
 
 Paths are absolute, NFC-normalized, slash-normalized, bounded, traversal-safe, and must end in `.md`. Active paths are unique. Deletion is soft; restoring a deleted document preserves all versions. Editing appends an immutable revision. `restoreVersion` creates a new revision from an older version rather than rewriting history.

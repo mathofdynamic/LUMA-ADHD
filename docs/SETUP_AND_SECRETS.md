@@ -1,6 +1,6 @@
 # LUMA ADHD setup and secrets
 
-Phase 03 establishes the provider-neutral agent runtime and the verified Nebula adapter on top of the Phase 02 Telegram integration. The application and automated tests run locally with empty values, fake providers/transports, and local Wrangler bindings. Live activation is never performed by ordinary tests or deployments.
+Phase 05 extends the provider-neutral runtime with inspectable reputation and provider-neutral GOD supervision. The application and automated tests run locally with empty values, fake providers/transports, and local Wrangler bindings. Live activation is never performed by ordinary tests or deployments.
 
 ## Configuration categories
 
@@ -18,14 +18,14 @@ These values identify a resource or select behavior. They are not authentication
 - `database_name`, `queue`, and Worker `name` in `wrangler.jsonc` - safe Cloudflare resource names.
 - `database_id` in `wrangler.jsonc` - a safe D1 resource identifier populated after the real database is created.
 
-The identity map uses aliases such as `gateway`, `product`, `growth`, `creative`, `technical`, `finance`, `customer`, `operations`, `heretic`, and `god`. The alias-to-agent mapping is deterministic in code. Adding a bot changes configuration, not orchestration logic.
+The Telegram identity map contains only `gateway`, `product`, `growth`, `creative`, `technical`, `finance`, `customer`, `operations`, and `heretic`. `agent-god` is an internal supervisory identity and has no Telegram bot. GOD announcements use the existing `gateway` transport while canonical authorship remains `agent-god`.
 
 ### Secrets
 
 These values authenticate the application and must never be committed, placed in `wrangler.jsonc`, or printed in logs:
 
 - `TELEGRAM_WEBHOOK_SECRET`.
-- `TELEGRAM_*_BOT_TOKEN` for the gateway and persona bots.
+- `TELEGRAM_*_BOT_TOKEN` for the gateway and normal persona bots only. There is no `TELEGRAM_GOD_BOT_TOKEN`.
 - `NEBULA_API_KEY`.
 - `GOD_API_KEY`.
 - `ADMIN_AUTH_SECRET`.
@@ -52,7 +52,7 @@ The tracked `.dev.vars.example` contains names and empty values only. Copy it to
    npm run build
    ```
 
-5. Start the local Worker with `npm run dev`. Wrangler uses local D1 and Queue simulation by default. No Telegram, Nebula, GOD, admin, or Cloudflare API credential is needed for local Phase 03 code or tests. A webhook request without the local secret is rejected safely.
+5. Start the local Worker with `npm run dev`. Wrangler uses local D1 and Queue simulation by default. No Telegram, Nebula, GOD, admin, or Cloudflare API credential is needed for local Phase 05 code or tests. A webhook request without the local secret is rejected safely.
 
 Manual development can authenticate Wrangler with the browser-based login flow:
 
@@ -78,15 +78,14 @@ npx wrangler secret put TELEGRAM_FINANCE_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CUSTOMER_BOT_TOKEN
 npx wrangler secret put TELEGRAM_OPERATIONS_BOT_TOKEN
 npx wrangler secret put TELEGRAM_HERETIC_BOT_TOKEN
-npx wrangler secret put TELEGRAM_GOD_BOT_TOKEN
 npx wrangler secret put NEBULA_API_KEY
 npx wrangler secret put GOD_API_KEY
 npx wrangler secret put ADMIN_AUTH_SECRET
 ```
 
-Use the appropriate Worker environment when staging and production configuration are introduced. Do not use `.dev.vars` as a production deployment mechanism. GOD remains unconfigured until a later phase; do not create or require `TELEGRAM_GOD_BOT_TOKEN` for Phase 03.
+Use the appropriate Worker environment when staging and production configuration are introduced. Do not use `.dev.vars` as a production deployment mechanism. GOD requires a provider-specific API contract and secret before live execution. It never requires a Telegram GOD bot or `TELEGRAM_GOD_BOT_TOKEN`.
 
-Automatic deployment may later use a restricted Cloudflare API token stored as a GitHub Actions secret. That token is separate from application runtime secrets and should have only the account permissions required to deploy this Worker. Phase 03 does not create or use it.
+Automatic deployment may later use a restricted Cloudflare API token stored as a GitHub Actions secret. That token is separate from application runtime secrets and should have only the account permissions required to deploy this Worker. Phase 05 does not create or use it.
 
 ## D1 identifier lifecycle
 
@@ -94,7 +93,7 @@ Automatic deployment may later use a restricted Cloudflare API token stored as a
 
 ## Telegram activation boundary
 
-Phase 02 provides the adapter, normalization, D1 mappings, idempotent webhook ingestion, outbound projection records, and fake-transport tests. Phase 03 adds bounded runtime orchestration and the verified Nebula provider. The gateway is the only supported ingress webhook. Persona bots are outbound identities; do not install persona webhooks. Before live integration testing, configure the private group, stable human admin IDs, verified bot identities, bot tokens, webhook secret, and Nebula secret, then perform deliberate operator-controlled validation.
+Phase 02 provides the adapter, normalization, D1 mappings, idempotent webhook ingestion, outbound projection records, and fake-transport tests. Phase 03 adds bounded runtime orchestration and the verified Nebula provider. Phase 05 adds GOD as an internal reviewer only. The gateway is the only supported ingress webhook. Persona bots are outbound identities; do not install persona webhooks. GOD summaries use the gateway bot and preserve `agent-god` as canonical author. Before live integration testing, configure the private group, stable human admin IDs, verified bot identities, bot tokens, webhook secret, and Nebula secret, then perform deliberate operator-controlled validation.
 
 The common `TELEGRAM_WEBHOOK_SECRET` is sent to Telegram when a webhook is configured and is checked against the `X-Telegram-Bot-Api-Secret-Token` request header before the request body is read. Bot tokens remain runtime secrets. Telegram bot IDs and usernames remain ordinary configuration identifiers in `TELEGRAM_BOT_IDENTITIES_JSON`.
 
@@ -129,8 +128,8 @@ powershell -File .\scripts\agent-ambient-smoke.ps1 -GroupId '<telegram group id>
 | Phase 00 | Local Worker, local D1/Queue simulation, empty config contract | No |
 | Phase 02 | Telegram group ID, admin user IDs, gateway/persona bot identities, bot tokens, webhook secret for live activation | Yes only for live Telegram activation; fakes are sufficient for code/tests |
 | Phase 03 | Nebula API key, base URL, and model configuration | Yes, Nebula key |
-| Phase 05 | GOD/frontier-provider key, base URL, and model configuration | Yes, GOD key |
+| Phase 05 | GOD provider protocol, API key, base URL, and model configuration; no GOD Telegram bot | Yes, only after provider is selected |
 | Phase 06+ | Production admin authentication secret | Yes, admin secret |
 | Phase 08 | Restricted Cloudflare API token if automatic deployment is enabled | Only if CI/CD is enabled |
 
-No credential is required for local Phase 03 development or automated tests. Live Telegram and Nebula validation requires the Phase 02 values above plus the Phase 03 Nebula secret. The GOD bot remains intentionally deferred.
+No credential is required for local Phase 05 development or automated tests. Live Telegram and Nebula validation requires the Phase 02 values above plus the Phase 03 Nebula secret. Live GOD validation additionally requires a verified provider, model, and provider secret; `TELEGRAM_GOD_BOT_TOKEN` is never required.

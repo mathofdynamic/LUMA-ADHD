@@ -15,7 +15,7 @@
   // intentionally absent; use .dev.vars locally and Wrangler secrets later.
   "vars": {
     "LUMA_ENVIRONMENT": "local",
-    "LUMA_PHASE": "04-memory-files-knowledge",
+    "LUMA_PHASE": "05-reputation-and-god",
     "TELEGRAM_GROUP_ID": "",
     "TELEGRAM_ADMIN_USER_IDS": "",
     "TELEGRAM_BOT_IDENTITIES_JSON": "{}",

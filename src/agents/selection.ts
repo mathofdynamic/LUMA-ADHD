@@ -1,4 +1,5 @@
 import type { AgentRecord, AgentSpecialtyRecord, AgentInterestRecord, ThreadRecord } from "../database/types";
+import { normalizeReputationDomain } from "../reputation/model";
 
 export interface AgentCandidateProfile {
   readonly agent: AgentRecord;
@@ -25,14 +26,14 @@ export interface ScoredCandidate {
 }
 
 const PHASE_DOMAINS: Readonly<Record<string, readonly string[]>> = {
-  open: ["product_strategy", "customer_experience", "growth_strategy"],
-  exploring: ["product_strategy", "growth_strategy", "customer_experience"],
+  open: ["product_strategy", "customer_experience", "growth"],
+  exploring: ["product_strategy", "growth", "customer_experience"],
   debating: ["critical_analysis", "product_strategy", "finance_pricing"],
-  evidence_gathering: ["technical_architecture", "critical_analysis", "customer_experience"],
-  developing: ["technical_architecture", "operations_strategy", "ux_creative"],
-  synthesizing: ["product_strategy", "operations_strategy", "finance_pricing"],
-  human_required: ["customer_experience", "operations_strategy"],
-  blocked: ["critical_analysis", "operations_strategy", "technical_architecture"],
+  evidence_gathering: ["engineering_architecture", "critical_analysis", "customer_experience"],
+  developing: ["engineering_architecture", "operations", "ux_creative"],
+  synthesizing: ["product_strategy", "operations", "finance_pricing"],
+  human_required: ["customer_experience", "operations"],
+  blocked: ["critical_analysis", "operations", "engineering_architecture"],
   reopened: ["critical_analysis", "product_strategy", "customer_experience"],
 };
 
@@ -82,7 +83,7 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
         score += relevance;
         reasons.push("lexical specialty or interest relevance");
       }
-      const phaseFit = profile.specialties.some((item) => phaseDomains.includes(item.domain));
+      const phaseFit = profile.specialties.some((item) => phaseDomains.includes(normalizeReputationDomain(item.domain)));
       if (phaseFit) {
         score += 14;
         reasons.push("thread phase fit");

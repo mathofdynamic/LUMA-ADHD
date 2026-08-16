@@ -6,6 +6,10 @@ import { AgentRuntimeService, type AgentRuntimeDependencies } from "./runtime";
 import { AgentScheduler, type AgentJobQueue } from "./scheduler";
 import { createMemoryServices } from "../memory";
 import { KnowledgeScheduler } from "../knowledge/scheduler";
+import { ReputationService } from "../reputation/service";
+import { GodReviewService } from "../god/service";
+import { ReputationScheduler } from "../reputation/scheduler";
+import { GodScheduler } from "../god/scheduler";
 
 export interface AgentRuntimeEnvironment {
   readonly DB: D1Database;
@@ -25,7 +29,9 @@ export interface AgentRuntimeEnvironment {
   readonly TELEGRAM_CUSTOMER_BOT_TOKEN?: string;
   readonly TELEGRAM_OPERATIONS_BOT_TOKEN?: string;
   readonly TELEGRAM_HERETIC_BOT_TOKEN?: string;
-  readonly TELEGRAM_GOD_BOT_TOKEN?: string;
+  readonly GOD_API_KEY?: string;
+  readonly GOD_BASE_URL?: string;
+  readonly GOD_MODEL?: string;
 }
 
 export function createAgentRuntime(
@@ -39,6 +45,7 @@ export function createAgentRuntime(
     model: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL,
   });
   const memory = createMemoryServices(repositories, { provider, modelKey: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL });
+  const reputation = new ReputationService({ repositories, now: options?.now });
   const telegramConfig = parseTelegramConfig(env);
   const telegram = createTelegramApplication({
     repositories,
@@ -53,10 +60,48 @@ export function createAgentRuntime(
     telegram,
     modelKey: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL,
     memory,
+    reputation,
     now: options?.now,
     rng: options?.rng,
   };
   return new AgentRuntimeService(dependencies);
+}
+
+/**
+ * GOD is intentionally not auto-wired to Nebula. The provider protocol and
+ * credential are provider-specific and must be supplied explicitly after
+ * official documentation has been verified.
+ */
+export function createGodReviewService(
+  env: AgentRuntimeEnvironment,
+  options: {
+    readonly provider?: LLMProvider;
+    readonly now?: () => string;
+  } = {},
+): GodReviewService | null {
+  if (!options.provider || !env.GOD_MODEL) return null;
+  const repositories = createRepositories(env.DB);
+  const reputation = new ReputationService({ repositories, now: options.now });
+  const memory = createMemoryServices(repositories, {
+    provider: options.provider,
+    modelKey: env.GOD_MODEL,
+  });
+  const telegramConfig = parseTelegramConfig(env);
+  const telegram = createTelegramApplication({
+    repositories,
+    config: telegramConfig,
+    transport: new TelegramBotApiTransport(telegramConfig),
+    now: options.now,
+  });
+  return new GodReviewService({
+    repositories,
+    provider: options.provider,
+    modelKey: env.GOD_MODEL,
+    reputation,
+    memory,
+    telegram,
+    now: options.now,
+  });
 }
 
 export function createAgentScheduler(
@@ -76,4 +121,23 @@ export function createKnowledgeScheduler(
   options?: { readonly now?: () => string },
 ): KnowledgeScheduler {
   return new KnowledgeScheduler(createRepositories(env.DB), env.AGENT_JOBS, options?.now);
+}
+
+export function createReputationScheduler(
+  env: AgentRuntimeEnvironment & { readonly AGENT_JOBS: AgentJobQueue },
+  options?: { readonly now?: () => string },
+): ReputationScheduler {
+  return new ReputationScheduler({ repositories: createRepositories(env.DB), queue: env.AGENT_JOBS, now: options?.now });
+}
+
+export function createGodScheduler(
+  env: AgentRuntimeEnvironment & { readonly AGENT_JOBS: AgentJobQueue },
+  options?: { readonly now?: () => string; readonly enabled?: boolean },
+): GodScheduler {
+  return new GodScheduler({
+    repositories: createRepositories(env.DB),
+    queue: env.AGENT_JOBS,
+    enabled: options?.enabled ?? false,
+    now: options?.now,
+  });
 }

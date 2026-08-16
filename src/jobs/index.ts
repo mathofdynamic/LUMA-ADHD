@@ -1,8 +1,9 @@
 import type { MessageBatch } from "@cloudflare/workers-types";
-import { createAgentRuntime, type AgentRuntimeEnvironment } from "../agents/factory";
+import { createAgentRuntime, createGodReviewService, type AgentRuntimeEnvironment } from "../agents/factory";
 import { FOUNDATION_GUARDRAILS } from "../guardrails";
 import { RuntimeProviderFailure } from "../agents/runtime";
 import { createMemoryServices } from "../memory";
+import { ReputationService } from "../reputation/service";
 
 export interface AgentJobMessage {
   readonly kind: "agent.job" | "foundation.noop";
@@ -47,6 +48,8 @@ export async function consumeAgentJobs(
   const runtime = createAgentRuntime(env);
   const repositories = runtime.repositories;
   const memory = createMemoryServices(repositories);
+  const reputation = new ReputationService({ repositories });
+  const godReview = createGodReviewService(env);
 
   for (const message of batch.messages) {
     if (!isAgentJobMessage(message.body)) {
@@ -74,6 +77,32 @@ export async function consumeAgentJobs(
     try {
       if (claimed.jobType === "knowledge.sync_source") {
         await memory.knowledge.processJob(claimed);
+      } else if (claimed.jobType === "reputation.daily_score" || claimed.jobType === "reputation.off_cycle_score") {
+        const scoringDay = typeof claimed.payload.scoringDay === "string" ? claimed.payload.scoringDay : undefined;
+        if (claimed.jobType === "reputation.off_cycle_score") {
+          await reputation.calculateOffCycle(claimed.id, scoringDay);
+        } else {
+          await reputation.calculateDaily(scoringDay);
+        }
+      } else if (claimed.jobType === "god.review") {
+        if (!godReview) {
+          await repositories.events.append({
+            eventType: "god.review_deferred",
+            aggregateType: "job",
+            aggregateId: claimed.id,
+            jobId: claimed.id,
+            idempotencyKey: `god-review-deferred:${claimed.id}`,
+            payload: { reason: "GOD provider is not configured; no provider call was made" },
+          });
+        } else {
+          await godReview.run({
+            idempotencyKey: `god-review:${claimed.id}`,
+            jobId: claimed.id,
+            publishTelegram: claimed.payload.publishTelegram === true,
+            telegramChatId: typeof claimed.payload.telegramChatId === "string" ? claimed.payload.telegramChatId : undefined,
+            telegramThreadId: typeof claimed.payload.telegramThreadId === "string" ? claimed.payload.telegramThreadId : undefined,
+          });
+        }
       } else {
         await runtime.processJob(claimed);
       }

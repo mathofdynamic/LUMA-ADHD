@@ -1,7 +1,7 @@
 import { nowIso } from "../database/ids";
 import type { createRepositories } from "../database/repositories";
 import { FOUNDATION_GUARDRAILS } from "../guardrails";
-import { findTelegramBotForAgent, TelegramConfigurationError, type TelegramConfig } from "./config";
+import { findTelegramBotForAgent, getTelegramBot, TelegramConfigurationError, type TelegramConfig } from "./config";
 import { renderTelegramText } from "./format";
 import {
   TelegramTransportError,
@@ -63,12 +63,14 @@ export class TelegramOutboundService {
   async projectAgentMessage(
     input: TelegramAgentProjectionInput,
   ): Promise<TelegramAgentProjectionResult> {
-    const bot = findTelegramBotForAgent(this.dependencies.config, input.agentId);
+    const bot = input.transportBotAlias
+      ? getTelegramBot(this.dependencies.config, input.transportBotAlias)
+      : findTelegramBotForAgent(this.dependencies.config, input.agentId);
     if (!bot) {
       throw new TelegramConfigurationError(`no Telegram persona is mapped to agent '${input.agentId}'`);
     }
 
-    if (bot.telegramUserId !== null) {
+    if (bot.telegramUserId !== null && bot.agentId !== null) {
       await this.dependencies.repositories.telegramIdentities.upsert({
         agentId: input.agentId,
         telegramUserId: bot.telegramUserId,

@@ -130,6 +130,8 @@ export interface TelegramAgentProjectionInput {
   readonly threadId: string;
   readonly chatId: string;
   readonly agentId: string;
+  /** GOD is authored by agent-god but transported by the gateway bot. */
+  readonly transportBotAlias?: TelegramBotAlias;
   readonly contentText: string;
   readonly contentFormat?: TelegramContentFormat;
   readonly idempotencyKey: string;

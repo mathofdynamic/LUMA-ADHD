@@ -294,6 +294,12 @@ export class DecisionRecordRepository {
     return record;
   }
 
+  async getById(id: string): Promise<DecisionRecord> {
+    const row = await this.database.prepare("SELECT * FROM decision_records WHERE id = ?").bind(id).first<DecisionRow>();
+    if (!row) throw new NotFoundError("decision", id);
+    return mapDecision(row);
+  }
+
   async listForThread(threadId: string, limit = 20): Promise<readonly DecisionRecord[]> {
     const safeLimit = requireLimit(limit, "decision limit", 100);
     const rows = await this.database.prepare(

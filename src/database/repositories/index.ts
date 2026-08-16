@@ -14,6 +14,7 @@ import { ScheduledJobRepository } from "./scheduled-jobs";
 import { TelegramOutboundRepository } from "./telegram-outbound";
 import { ThreadLifecycleService, ThreadRepository } from "./threads";
 import { ProviderUsageRepository } from "./provider-usage";
+import { ReputationRepository } from "./reputation";
 import {
   DecisionRecordRepository,
   KnowledgeSourceRepository,
@@ -39,6 +40,7 @@ export {
   ThreadRepository,
   UserRepository,
   ProviderUsageRepository,
+  ReputationRepository,
   DecisionRecordRepository,
   KnowledgeSourceRepository,
   MemoryNoteRepository,
@@ -68,6 +70,7 @@ export function createRepositories(database: D1Database) {
     threadLifecycle: new ThreadLifecycleService(threads),
     users: new UserRepository(client),
     providerUsage: new ProviderUsageRepository(client),
+    reputation: new ReputationRepository(client),
     decisions: new DecisionRecordRepository(client),
     knowledgeSources: new KnowledgeSourceRepository(client),
     memoryNotes: new MemoryNoteRepository(client),
