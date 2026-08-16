@@ -9,13 +9,15 @@ import { createAgentScheduler, createGodScheduler, createKnowledgeScheduler, cre
 import { routeApi } from "./api/router";
 import { consumeAgentJobs, type AgentJobMessage } from "./jobs";
 import { handleTelegramWebhook } from "./telegram/webhook";
+import type { TelegramRuntimeEnv } from "./telegram/webhook";
+import { withAdminSecurityHeaders } from "./admin/auth";
 
 function logScheduleTick(controller: ScheduledController): void {
   console.log(
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "05-reputation-and-god",
+      phase: "06-admin-observatory",
     }),
   );
 }
@@ -25,14 +27,15 @@ const handler = {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/telegram/webhook/")) {
-      return handleTelegramWebhook(request, env);
+      return handleTelegramWebhook(request, env as unknown as TelegramRuntimeEnv);
     }
 
     if (url.pathname.startsWith("/api/")) {
       return routeApi(request, env);
     }
 
-    return env.ASSETS.fetch(request);
+    const asset = await env.ASSETS.fetch(request);
+    return url.pathname.startsWith("/admin") ? withAdminSecurityHeaders(asset) : asset;
   },
 
   async scheduled(
