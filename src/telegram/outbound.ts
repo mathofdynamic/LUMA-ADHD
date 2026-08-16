@@ -66,7 +66,7 @@ export class TelegramOutboundService {
     const bot = input.transportBotAlias
       ? getTelegramBot(this.dependencies.config, input.transportBotAlias)
       : findTelegramBotForAgent(this.dependencies.config, input.agentId);
-    if (!bot) {
+    if (!bot || (this.dependencies.transport.requiresBotToken === true && !bot.token)) {
       throw new TelegramConfigurationError(`no Telegram persona is mapped to agent '${input.agentId}'`);
     }
 

@@ -17,7 +17,7 @@ function logScheduleTick(controller: ScheduledController): void {
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "06-admin-observatory",
+      phase: "07-human-diagrams-observability",
     }),
   );
 }

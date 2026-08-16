@@ -38,6 +38,8 @@ import type { MemoryServices } from "../memory";
 import type { ReputationService } from "../reputation/service";
 import { assessOfficialGrounding, type OfficialGroundingAssessment } from "./grounding";
 import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
+import { HumanTaskService } from "../human-tasks";
+import { DiagramService } from "../diagrams";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
@@ -208,6 +210,28 @@ export class AgentRuntimeService {
         return null;
       }
       return this.runDeepWork(job, threadId, stringField(job.payload, "trigger") ?? "explicit_request");
+    }
+
+    if (job.jobType === "human_task.wake") {
+      const taskId = stringField(job.payload, "taskId");
+      const threadId = stringField(job.payload, "threadId");
+      const messageId = stringField(job.payload, "messageId");
+      if (!taskId || !threadId || !messageId) return null;
+      const task = await this.dependencies.repositories.humanTasks.getById(taskId);
+      if (task.status !== "completed") return null;
+      return this.runInteractiveBurst({
+        job,
+        messageId,
+        threadId,
+        addressedAgentId: task.requestedByAgentId,
+        wakeReason: "human_task_response",
+      });
+    }
+
+    if (job.jobType === "diagram.render") {
+      const artifactId = stringField(job.payload, "artifactId");
+      if (artifactId) await new DiagramService(this.dependencies.repositories).render(artifactId);
+      return null;
     }
 
     await this.dependencies.repositories.events.append({
@@ -972,20 +996,27 @@ export class AgentRuntimeService {
         const title = typeof metadata.title === "string" && metadata.title.trim().length > 0
           ? metadata.title
           : "LUMA ADHD human input requested";
-        await this.dependencies.repositories.humanTasks.create({
+        const reason = stringField(metadata, "reason") ?? action.reasonSummary;
+        const blocking = booleanField(metadata, "blocking");
+        const taskService = new HumanTaskService({
+          repositories: this.dependencies.repositories,
+          telegram: this.dependencies.telegram,
+          now: this.now,
+        });
+        await taskService.createFromAgent({
           threadId: context.thread.id,
+          chatId: context.thread.chatId,
           requestedByAgentId: context.agent.id,
           title,
           description: action.content ?? action.reasonSummary,
+          reason,
+          blocking,
+          targetHumanUserId: stringField(metadata, "targetHumanUserId") ?? undefined,
+          requestKey: stringField(metadata, "requestKey") ?? stringField(metadata, "category") ?? undefined,
           priority: typeof metadata.priority === "number" ? Math.max(0, Math.min(100, Math.round(metadata.priority))) : 60,
           idempotencyKey: actionKey,
-          metadata: { confidence: action.confidence, source: "agent_runtime" },
+          metadata: { confidence: action.confidence, source: "agent_runtime", turnId: context.turn.id },
         });
-        await this.dependencies.repositories.threadLifecycle
-          .transition({ threadId: context.thread.id, to: "human_required", actor: { type: "agent", agentId: context.agent.id }, reason: action.reasonSummary })
-          .catch((error: unknown) => {
-            if (!(error instanceof InvalidTransitionError)) throw error;
-          });
         return {};
       }
 
@@ -1092,9 +1123,29 @@ export class AgentRuntimeService {
         return {};
       }
 
-      case "DRAW":
+      case "DRAW": {
+        const candidate = action.metadata.diagramSpec ?? action.metadata.diagram;
+        const diagramSpec = candidate && typeof candidate === "object" && !Array.isArray(candidate)
+          ? candidate
+          : {
+              diagram_type: "flow",
+              title: (action.content ?? "LUMA diagram").slice(0, 120),
+              direction: /[\u0600-\u06ff]/u.test(action.content ?? "") ? "rtl" : "ltr",
+              nodes: [{ id: "main", label: (action.content ?? "LUMA diagram").slice(0, 180) }],
+              edges: [],
+              groups: [],
+              notes: [],
+            };
+        const diagram = await new DiagramService(this.dependencies.repositories).create({
+          spec: diagramSpec,
+          threadId: context.thread.id,
+          messageId: context.wakeMessage?.id,
+          actor: { agentId: context.agent.id },
+          idempotencyKey: actionKey,
+          metadata: { runtimeTurnId: context.turn.id, source: "agent_runtime" },
+        });
         await this.dependencies.repositories.events.append({
-          eventType: "runtime.draw_deferred",
+          eventType: "runtime.draw_created",
           aggregateType: "thread",
           aggregateId: context.thread.id,
           threadId: context.thread.id,
@@ -1103,12 +1154,25 @@ export class AgentRuntimeService {
           idempotencyKey: actionKey,
           payload: {
             intent: action.intent,
-            content: action.content ?? "",
-            metadata: action.metadata,
-            deferredTo: "phase-07",
+            artifactId: diagram.artifact.id,
+            diagramType: diagram.spec.diagramType,
+            sourceOnly: true,
           },
         });
+        // Kept as a compatibility telemetry alias for Phase 03 observability
+        // consumers. DRAW is now a real D1-backed artifact operation.
+        await this.dependencies.repositories.events.append({
+          eventType: "runtime.draw_deferred",
+          aggregateType: "artifact",
+          aggregateId: diagram.artifact.id,
+          threadId: context.thread.id,
+          jobId: context.job.id,
+          actor: { type: "agent", agentId: context.agent.id },
+          idempotencyKey: `${actionKey}:compatibility`,
+          payload: { artifactId: diagram.artifact.id, sourceOnly: true, compatibilityAlias: true },
+        });
         return {};
+      }
 
       case "VOTE": {
         const option = typeof action.metadata.option === "string" ? action.metadata.option : action.content;

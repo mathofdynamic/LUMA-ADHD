@@ -4,6 +4,7 @@ import { createDatabaseClient } from "../client";
 import { AgentRepository } from "./agents";
 import { AgentRequestRepository, AgentVoteRepository } from "./agent-runtime";
 import { AgentTurnRepository } from "./agent-turns";
+import { ArtifactRepository } from "./artifacts";
 import { DocumentRepository } from "./documents";
 import { EventRepository } from "./events";
 import { HumanTaskRepository } from "./human-tasks";
@@ -27,6 +28,7 @@ export {
   AgentRequestRepository,
   AgentVoteRepository,
   AgentTurnRepository,
+  ArtifactRepository,
   ChatRepository,
   DocumentRepository,
   EventRepository,
@@ -57,6 +59,7 @@ export function createRepositories(database: D1Database) {
     agentRequests: new AgentRequestRepository(client),
     agentVotes: new AgentVoteRepository(client),
     agentTurns: new AgentTurnRepository(client),
+    artifacts: new ArtifactRepository(client),
     chats: new ChatRepository(client),
     documents: new DocumentRepository(client),
     events: new EventRepository(client),

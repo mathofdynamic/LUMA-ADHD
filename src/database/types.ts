@@ -169,6 +169,23 @@ export interface HumanTaskRecord {
   readonly priority: number;
   readonly dueAt: string | null;
   readonly resolution: string | null;
+  readonly reason: string;
+  readonly blocking: boolean;
+    readonly targetHumanUserId: UserId | null;
+    readonly requestKey: string | null;
+    readonly requestMessageId: MessageId | null;
+    readonly responseMessageId: MessageId | null;
+  readonly respondedByUserId: UserId | null;
+  readonly responseSource: "none" | "telegram" | "admin";
+  readonly resolvedAt: string | null;
+  readonly telegramChatId: string | null;
+  readonly telegramMessageId: string | null;
+  readonly telegramBotAlias: string | null;
+  readonly telegramOutboundId: string | null;
+  readonly projectionStatus: "not_requested" | "pending" | "sent" | "failed";
+  readonly projectionError: string | null;
+  readonly wakeJobId: JobId | null;
+  readonly responseMetadata: JsonObject;
   readonly metadata: JsonObject;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -322,9 +339,58 @@ export interface CreateHumanTaskInput {
   readonly assigneeUserId?: UserId;
   readonly title: string;
   readonly description: string;
+  readonly reason?: string;
+  readonly blocking?: boolean;
+  readonly targetHumanUserId?: UserId;
+  readonly requestKey?: string;
   readonly priority?: number;
   readonly dueAt?: string;
   readonly metadata?: JsonObject;
+}
+
+export type ArtifactStatus = "draft" | "ready" | "rendered" | "failed" | "archived";
+export type ArtifactRenderStatus = "not_requested" | "rendered" | "unavailable" | "quota_exhausted" | "failed";
+export type ArtifactDeliveryStatus = "not_requested" | "sent" | "failed" | "not_available";
+
+export interface ArtifactRecord {
+  readonly id: string;
+  readonly artifactType: "diagram" | "attachment" | "export" | "other";
+  readonly title: string;
+  readonly sourceText: string | null;
+  readonly format: string | null;
+  readonly threadId: ThreadId | null;
+  readonly documentId: DocumentId | null;
+  readonly messageId: MessageId | null;
+  readonly createdByAgentId: AgentId | null;
+  readonly createdByUserId: UserId | null;
+  readonly status: ArtifactStatus;
+  readonly spec: JsonObject | null;
+  readonly sourceHash: string | null;
+  readonly renderStatus: ArtifactRenderStatus;
+  readonly renderAttemptCount: number;
+  readonly renderError: string | null;
+  readonly renderedAt: string | null;
+  readonly deliveryStatus: ArtifactDeliveryStatus;
+  readonly deliveryError: string | null;
+  readonly telegramChatId: string | null;
+  readonly telegramMessageId: string | null;
+  readonly telegramBotAlias: string | null;
+  readonly telegramFileId: string | null;
+  readonly metadata: JsonObject;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly deletedAt: string | null;
+}
+
+export interface ArtifactRevisionRecord {
+  readonly id: string;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly sourceText: string;
+  readonly metadata: JsonObject;
+  readonly createdByAgentId: AgentId | null;
+  readonly createdByUserId: UserId | null;
+  readonly createdAt: string;
 }
 
 export interface CreateDocumentInput {

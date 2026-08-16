@@ -6,8 +6,10 @@ import { createRepositories } from "../database/repositories";
 import { DocumentService } from "../memory/document-service";
 import { InstitutionalMemorySearch } from "../memory/retrieval";
 import { officialSourceByKey } from "../knowledge/sources";
+import { HumanTaskService } from "../human-tasks";
+import { DiagramService } from "../diagrams";
 import { listAdminSettings, resetAdminSetting, setAdminSetting, type AdminSettingKey } from "./settings";
-import type { ThreadState } from "../database/types";
+import type { HumanTaskStatus, ThreadState } from "../database/types";
 
 type Repositories = ReturnType<typeof createRepositories>;
 type Row = Record<string, unknown>;
@@ -21,6 +23,8 @@ export interface AdminRuntimeDisplayConfig {
   readonly telegramConfigured?: boolean;
   readonly nebulaConfigured?: boolean;
   readonly adminConfigured?: boolean;
+  readonly telegramGroupId?: string;
+  readonly telegramApplication?: Pick<import("../telegram").TelegramApplicationService, "projectAgentMessage">;
 }
 
 function stringValue(value: unknown, fallback = ""): string {
@@ -117,6 +121,8 @@ function agentCard(row: Row): JsonObject {
 export class AdminObservatoryService {
   readonly documents: DocumentService;
   readonly search: InstitutionalMemorySearch;
+  readonly humanTasks: HumanTaskService;
+  readonly diagrams: DiagramService;
 
   constructor(
     readonly database: DatabaseClient,
@@ -125,6 +131,8 @@ export class AdminObservatoryService {
   ) {
     this.documents = new DocumentService(repositories);
     this.search = new InstitutionalMemorySearch(database);
+    this.humanTasks = new HumanTaskService({ repositories, telegram: runtimeConfig.telegramApplication });
+    this.diagrams = new DiagramService(repositories);
   }
 
   async audit(
@@ -435,8 +443,67 @@ export class AdminObservatoryService {
       id: stringValue(row.id), title: stringValue(row.title), description: stringValue(row.description),
       status: stringValue(row.status), priority: numberValue(row.priority), dueAt: nullableString(row.due_at),
       resolution: nullableString(row.resolution), threadId: nullableString(row.thread_id), threadTitle: nullableString(row.thread_title),
-      requesterName: nullableString(row.requester_name), createdAt: stringValue(row.created_at), updatedAt: stringValue(row.updated_at),
+      requesterName: nullableString(row.requester_name), reason: stringValue(row.reason), blocking: booleanValue(row.blocking),
+      targetHumanUserId: nullableString(row.target_human_user_id), requestMessageId: nullableString(row.request_message_id),
+      responseMessageId: nullableString(row.response_message_id), respondedByUserId: nullableString(row.responded_by_user_id),
+      responseSource: stringValue(row.response_source, "none"), resolvedAt: nullableString(row.resolved_at),
+      projectionStatus: stringValue(row.projection_status, "not_requested"), projectionError: nullableString(row.projection_error),
+      telegramMessageId: nullableString(row.telegram_message_id), telegramBotAlias: nullableString(row.telegram_bot_alias),
+      wakeJobId: nullableString(row.wake_job_id), createdAt: stringValue(row.created_at), updatedAt: stringValue(row.updated_at),
     }));
+  }
+
+  async listArtifacts(input: { readonly limit?: string | null; readonly includeDeleted?: boolean } = {}): Promise<readonly JsonObject[]> {
+    const artifacts = await this.diagrams.list({ limit: limitValue(input.limit ?? null, 50, 100), includeDeleted: input.includeDeleted === true });
+    return artifacts.map((artifact) => {
+      const { sourceText: _sourceText, ...summary } = artifact;
+      return jsonObject(summary);
+    });
+  }
+
+  async artifactDetail(id: string): Promise<JsonObject> {
+    const detail = await this.diagrams.detail(id);
+    return { artifact: jsonObject(detail.artifact), revisions: jsonValue(detail.revisions.map((revision) => jsonObject(revision))) };
+  }
+
+  async renderArtifact(id: string): Promise<JsonObject> {
+    return jsonObject(await this.diagrams.render(id));
+  }
+
+  async createPhase07DiagramSmoke(): Promise<JsonObject> {
+    const idempotencyKey = "phase07-live-diagram-smoke";
+    const existing = await this.repositories.artifacts.findByIdempotencyKey(idempotencyKey);
+    if (existing) return { reused: true, artifact: jsonObject(existing) };
+
+    const created = await this.diagrams.create({
+      actor: { agentId: "agent-technical" },
+      idempotencyKey,
+      metadata: { phase07Smoke: true, purpose: "controlled operator validation" },
+      spec: {
+        diagramType: "architecture",
+        title: "LUMA ADHD — Phase 07 architecture smoke",
+        direction: "ltr",
+        nodes: [
+          { id: "human", label: "Human" },
+          { id: "gateway", label: "Telegram Gateway" },
+          { id: "d1", label: "D1" },
+          { id: "runtime", label: "Agent Runtime" },
+          { id: "persona", label: "Persona Bots" },
+          { id: "memory", label: "Memory / RAG" },
+        ],
+        edges: [
+          { from: "human", to: "gateway" },
+          { from: "gateway", to: "d1" },
+          { from: "d1", to: "runtime" },
+          { from: "runtime", to: "persona" },
+          { from: "memory", to: "runtime" },
+        ],
+        groups: [],
+        notes: ["D1 remains canonical; Telegram is an ingress and projection layer."],
+      },
+    });
+    const artifact = await this.diagrams.render(created.artifact.id);
+    return { reused: false, artifact: jsonObject(artifact) };
   }
 
   async listFiles(input: { readonly query?: string | null; readonly logicalPath?: string | null; readonly includeDeleted?: boolean; readonly limit?: string | null } = {}): Promise<readonly JsonObject[]> {
@@ -604,9 +671,10 @@ export class AdminObservatoryService {
   }
 
   async listSystem(): Promise<JsonObject> {
-    const [jobs, schedules, providers, telegram, knowledge, errors, audit, counts] = await Promise.all([
+    const [jobs, schedules, providers, telegram, knowledge, errors, audit, counts, turns, artifacts, taskState] = await Promise.all([
       this.database.prepare(
         `SELECT j.id, j.job_type, j.status, j.attempt_count, j.max_attempts, j.due_at, j.created_at, j.updated_at, j.completed_at, j.last_error,
+                j.lease_owner, j.lease_expires_at,
                 json_extract(j.payload_json, '$.threadId') AS thread_id,
                 t.title AS thread_title, a.display_name AS agent_name
          FROM jobs j LEFT JOIN threads t ON t.id = json_extract(j.payload_json, '$.threadId')
@@ -635,12 +703,43 @@ export class AdminObservatoryService {
          FROM audit_log al WHERE al.admin_session_id IS NOT NULL ORDER BY al.created_at DESC LIMIT 80`,
       ).all<Row>(),
       this.pressureSummary(),
+      this.database.prepare(
+        `SELECT status, json_extract(metadata_json, '$.intent') AS intent, COUNT(*) AS count,
+                MAX(created_at) AS last_at
+         FROM agent_turns GROUP BY status, intent ORDER BY last_at DESC LIMIT 40`,
+      ).all<Row>(),
+      this.database.prepare(
+        `SELECT id, artifact_type, title, status, render_status, delivery_status,
+                render_attempt_count, render_error, delivery_error, thread_id,
+                created_by_agent_id, created_at, updated_at
+         FROM artifacts ORDER BY updated_at DESC LIMIT 50`,
+      ).all<Row>(),
+      this.database.prepare(
+        `SELECT status, blocking, projection_status, COUNT(*) AS count
+         FROM human_tasks WHERE deleted_at IS NULL GROUP BY status, blocking, projection_status
+         ORDER BY count DESC LIMIT 30`,
+      ).all<Row>(),
     ]);
+    const hasRecentProviderFailure = providers.results.some((row) => stringValue(row.status) === "failed");
+    const hasTelegramFailure = telegram.results.some((row) => stringValue(row.status) === "failed");
+    const hasKnowledgeFailure = knowledge.results.some((row) => stringValue(row.status) === "failed");
+    const hasDiagramFailure = artifacts.results.some((row) => ["failed", "quota_exhausted"].includes(stringValue(row.render_status)));
+    const queuedJobs = jobs.results.filter((row) => ["pending", "retry_scheduled"].includes(stringValue(row.status))).length;
     return {
       generatedAt: nowIso(), jobs: jsonRows(jobs.results), schedules: jsonRows(schedules.results),
       providers: jsonRows(providers.results), telegram: jsonRows(telegram.results),
-      knowledge: jsonRows(knowledge.results), errors: jsonRows(errors.results),
+      knowledge: jsonRows(knowledge.results), errors: errors.results.map((row) => ({ ...row, category: this.errorCategory(row) })),
       audit: audit.results.map((row) => ({ ...row, payload: objectValue(row.payload_json) })), pressure: counts,
+      turns: jsonRows(turns.results), artifacts: jsonRows(artifacts.results), humanTasks: jsonRows(taskState.results),
+      health: {
+        normalAgentProvider: this.healthState(hasRecentProviderFailure, "provider"),
+        godProvider: this.runtimeConfig.godConfigured === true ? this.healthState(hasRecentProviderFailure, "provider") : "attention",
+        telegram: this.runtimeConfig.telegramConfigured === true ? (hasTelegramFailure ? "degraded" : "healthy") : "attention",
+        queueJobs: queuedJobs > 10 ? "degraded" : "healthy",
+        knowledgeSync: hasKnowledgeFailure ? "attention" : "healthy",
+        humanTasks: taskState.results.some((row) => stringValue(row.status) === "blocked") ? "attention" : "healthy",
+        diagrams: hasDiagramFailure ? "attention" : "healthy",
+      },
     };
   }
 
@@ -676,10 +775,75 @@ export class AdminObservatoryService {
     return result.results.map((row) => ({ ...row, payload: objectValue(row.payload_json) }));
   }
 
-  async updateHumanTask(id: string, status: string, resolution?: string): Promise<JsonObject> {
+  async updateHumanTask(id: string, status: string, resolution?: string, responderUserId?: string): Promise<JsonObject> {
     const allowed = ["open", "claimed", "in_progress", "blocked", "completed", "rejected", "cancelled"] as const;
     if (!allowed.includes(status as typeof allowed[number])) throw new ValidationError("invalid human task status");
-    return jsonObject(await this.repositories.humanTasks.updateStatus(id, status as typeof allowed[number], resolution));
+    const result = await this.humanTasks.updateStatus({
+      taskId: id,
+      status: status as HumanTaskStatus,
+      resolution,
+      responderUserId,
+      responseSource: "admin",
+    });
+    return { ...jsonObject(result.task), wakeJob: result.wakeJob ? jsonObject(result.wakeJob) : null };
+  }
+
+  async createPhase07HumanTaskSmoke(): Promise<JsonObject> {
+    const requestKey = "phase07-live-human-task-smoke";
+    const existing = await this.repositories.humanTasks.findByRequestKey(requestKey);
+    if (existing) {
+      return {
+        reused: true,
+        task: jsonObject(existing),
+        threadId: existing.threadId,
+      };
+    }
+    if (!this.runtimeConfig.telegramGroupId) {
+      throw new ValidationError("Telegram workspace is not configured for the Phase 07 smoke task");
+    }
+    if (!this.runtimeConfig.telegramApplication) {
+      throw new ValidationError("Telegram outbound application is not configured for the Phase 07 smoke task");
+    }
+    const chat = await this.repositories.chats.findByTelegramId(this.runtimeConfig.telegramGroupId);
+    if (!chat) throw new ValidationError("the configured Telegram workspace is not present in D1");
+    if (!chat.telegramChatId) throw new ValidationError("the configured Telegram workspace has no Telegram mapping");
+
+    const thread = await this.repositories.threads.create({
+      chatId: chat.id,
+      title: "Phase 07 Human Task Smoke",
+      state: "open",
+      priority: 80,
+      createdByAgentId: "agent-customer",
+      metadata: { phase07Smoke: true, requestKey },
+    });
+    const result = await this.humanTasks.createFromAgent({
+      threadId: thread.id,
+      chatId: chat.id,
+      requestedByAgentId: "agent-customer",
+      title: "تست Human Task — Phase 07",
+      description: "لطفاً در پاسخ به همین پیام بنویس: تست انسانی Phase 07 انجام شد.",
+      reason: "برای بررسی مسیر درخواست انسانی → پاسخ → ادامه Thread.",
+      priority: 80,
+      blocking: true,
+      requestKey,
+      idempotencyKey: requestKey,
+      metadata: { phase07Smoke: true },
+    });
+    return { reused: result.reused, task: jsonObject(result.task), threadId: thread.id };
+  }
+
+  async retryJob(id: string): Promise<JsonObject> {
+    const job = await this.repositories.jobs.getById(id);
+    const allowed = new Set([
+      "telegram.interactive_message", "agent.ambient", "agent.deep_work", "human_task.wake",
+      "knowledge.sync_source", "reputation.daily_score", "reputation.off_cycle_score", "god.review", "diagram.render",
+    ]);
+    if (!allowed.has(job.jobType)) throw new ValidationError("job type is not recoverable through the Observatory");
+    return jsonObject(await this.repositories.jobs.retryFailed(id));
+  }
+
+  async recoverStaleJob(id: string): Promise<JsonObject> {
+    return jsonObject(await this.repositories.jobs.recoverStaleById(id));
   }
 
   async updateDirective(id: string, status: string, resolution?: string): Promise<JsonObject> {
@@ -698,6 +862,24 @@ export class AdminObservatoryService {
 
   async enqueueJob(input: { readonly jobType: string; readonly payload: JsonObject; readonly idempotencyKey: string; readonly priority?: number }): Promise<JsonObject> {
     return jsonObject(await this.repositories.jobs.create({ jobType: input.jobType, payload: input.payload, idempotencyKey: input.idempotencyKey, dueAt: nowIso(), priority: input.priority ?? 70, maxAttempts: 2 }));
+  }
+
+  private healthState(hasFailure: boolean, _kind: "provider"): "healthy" | "degraded" {
+    return hasFailure ? "degraded" : "healthy";
+  }
+
+  private errorCategory(row: Row): string {
+    const kind = stringValue(row.kind);
+    if (kind === "provider") return "provider_failure";
+    if (kind === "telegram") return "telegram_delivery";
+    if (kind === "job") {
+      const type = stringValue(row.title);
+      if (type === "human_task.wake") return "human_task_mapping";
+      if (type === "knowledge.sync_source") return "knowledge_fetch";
+      if (type === "god.review") return "god_execution";
+      if (type === "diagram.render") return "diagram_render_failed";
+    }
+    return "runtime_validation";
   }
 
   private async latestGodReview(): Promise<JsonObject | null> {

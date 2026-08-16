@@ -54,6 +54,7 @@ async function readTelegramResponse(response: Response): Promise<TelegramApiResp
 }
 
 export class TelegramBotApiTransport implements TelegramTransport {
+  readonly requiresBotToken = true;
   private readonly fetcher: typeof fetch;
 
   constructor(
