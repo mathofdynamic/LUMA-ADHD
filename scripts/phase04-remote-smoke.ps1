@@ -21,14 +21,36 @@ function New-SmokeSecret {
 }
 
 function Invoke-Smoke([string]$BaseUrl, [string]$Secret, [string]$Path, [hashtable]$Body = @{}) {
-  $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, ($BaseUrl + $Path))
-  $request.Headers.Add('X-Luma-Smoke-Secret', $Secret)
-  $request.Content = [System.Net.Http.StringContent]::new(($Body | ConvertTo-Json -Compress -Depth 8), [System.Text.Encoding]::UTF8, 'application/json')
-  $response = $http.SendAsync($request).Result
-  $responseBody = $response.Content.ReadAsStringAsync().Result
-  $parsed = $responseBody | ConvertFrom-Json
-  if (-not $response.IsSuccessStatusCode -or -not $parsed.ok) { throw ('Remote Phase 04 smoke request failed: ' + $Path + ' (' + [string]$parsed.error + ')') }
-  return $parsed
+  for ($attempt = 1; $attempt -le 5; $attempt += 1) {
+    $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, ($BaseUrl + $Path))
+    $request.Headers.Add('X-Luma-Smoke-Secret', $Secret)
+    $request.Content = [System.Net.Http.StringContent]::new(($Body | ConvertTo-Json -Compress -Depth 8), [System.Text.Encoding]::UTF8, 'application/json')
+    try {
+      $response = $http.SendAsync($request).Result
+      $responseBody = $response.Content.ReadAsStringAsync().Result
+      $parsed = $responseBody | ConvertFrom-Json
+    } finally {
+      $request.Dispose()
+    }
+    if ($response.IsSuccessStatusCode -and $parsed.ok) { return $parsed }
+    if ($response.StatusCode -eq [System.Net.HttpStatusCode]::Unauthorized -and $attempt -lt 5) {
+      Start-Sleep -Seconds 3
+      continue
+    }
+    throw ('Remote Phase 04 smoke request failed: ' + $Path + ' (' + [string]$parsed.error + ')')
+  }
+  throw ('Remote Phase 04 smoke request failed: ' + $Path + ' (bounded readiness retries exhausted)')
+}
+
+function Wait-SmokeReady([string]$BaseUrl) {
+  for ($attempt = 1; $attempt -le 10; $attempt += 1) {
+    try {
+      $response = $http.GetAsync($BaseUrl + '/__luma_phase04/ready').Result
+      if ($response.IsSuccessStatusCode) { return }
+    } catch { }
+    if ($attempt -lt 10) { Start-Sleep -Seconds 3 }
+  }
+  throw 'Temporary Worker did not become ready after bounded retries'
 }
 
 function Set-WorkerSecret([string]$WranglerPath, [string]$ConfigPath, [string]$Name, [string]$Secret) {
@@ -100,6 +122,7 @@ try {
   if ([string]::IsNullOrWhiteSpace($baseUrl)) { throw 'Temporary Worker URL was not returned' }
   $secret = New-SmokeSecret
   Set-WorkerSecret $wranglerPath $configFile $workerName $secret
+  Wait-SmokeReady $baseUrl
 
   $sourceKeys = @('luma', 'workflow', 'faq', 'umaq', 'subscription-plan', 'pricing', 'terms-of-use', 'terms-policies', 'growth-strategy', 'international-budget-plan', 'international-budget-plan-fa', 'marketing-contract')
   $first = @()
