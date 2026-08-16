@@ -24,9 +24,14 @@ export interface RetrievalResult extends ContextPackItem {
 export function normalizeFtsQuery(query: string): readonly string[] {
   if (typeof query !== "string") return [];
   const normalized = query.normalize("NFC").slice(0, 1_000);
-  const terms = normalized.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  const terms = normalized.match(/[\p{L}\p{N}_\u200c\u200d]+/gu) ?? [];
+  const expandedTerms = terms.flatMap((term) => {
+    const joined = term.replace(/[\u200c\u200d]/gu, "");
+    const components = term.split(/[\u200c\u200d]/gu).filter(Boolean);
+    return [joined, ...components];
+  });
   return [...new Set(
-    terms
+    expandedTerms
       .map((term) => term.slice(0, MAX_TERM_LENGTH))
       .filter((term) => Boolean(term) && !FTS_OPERATORS.has(term.toUpperCase())),
   )].slice(0, MAX_QUERY_TERMS);

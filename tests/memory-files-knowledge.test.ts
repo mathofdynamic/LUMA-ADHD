@@ -79,6 +79,7 @@ describe("Phase 04 logical workspaces and immutable memory", () => {
 describe("Phase 04 FTS retrieval and context packs", () => {
   it("handles Persian, English, malformed input, deleted documents, and bounded ranking", async () => {
     expect(normalizeFtsQuery('"growth" (pricing) لوما !!!')).toEqual(["growth", "pricing", "لوما"]);
+    expect(normalizeFtsQuery("ورک‌فلو")).toEqual(["ورکفلو", "ورک", "فلو"]);
     expect(normalizeFtsQuery("' ) OR *")).toEqual([]);
     expect(normalizeFtsQuery("*** ???")).toEqual([]);
     const path = `/shared/research/${testId("fts")}.md`;
