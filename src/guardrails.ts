@@ -8,6 +8,8 @@ export const FOUNDATION_GUARDRAILS = Object.freeze({
   maxRetries: 3,
   providerMaxAttempts: 2,
   providerTimeoutMilliseconds: 28_000,
+  godProviderTimeoutMilliseconds: 120_000,
+  godReviewMaxOutputTokens: 6_000,
   maxStructuredRepairAttempts: 1,
   recentContextMessageLimit: 12,
   maxAgentActionContentCharacters: 12_000,

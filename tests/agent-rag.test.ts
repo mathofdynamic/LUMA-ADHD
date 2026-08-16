@@ -138,6 +138,36 @@ describe("Phase 05 persistent Agent RAG", () => {
     expect(provider.calls[0]?.systemPrompt).toContain("Official LUMA material outranks");
     const turn = (await repositories.agentTurns.listByJob(context.job.id))[0];
     expect(turn?.metadata.retrieval).toMatchObject({ officialKnowledgeCount: expect.any(Number), retrievalCount: expect.any(Number) });
+    expect(Array.isArray(turn?.metadata.retrieval && (turn.metadata.retrieval as Record<string, unknown>).selectedSources)).toBe(true);
+  });
+
+  it("repairs a valid but unsupported LUMA answer once before persisting it", async () => {
+    await syncOfficialFixture();
+    const context = await runtimeFixture("لوما چیست و مهم‌ترین قابلیت‌هایش چه هستند؟");
+    const provider = new FakeProvider()
+      .enqueueJson(action("لوما یک ابزار هوشمند است."))
+      .enqueueJson(action("طبق مستند رسمی، لوما برای تبدیل ایده به خروجی قابل‌استفاده ساخته شده است."))
+      .enqueueJson({ intent: "WAIT", content: null, confidence: 0.8, reason_summary: "No additional contribution.", target_agent_id: null, target_thread_id: null, metadata: {} })
+      .enqueueJson({ intent: "WAIT", content: null, confidence: 0.8, reason_summary: "No additional contribution.", target_agent_id: null, target_thread_id: null, metadata: {} });
+    const runtime = new AgentRuntimeService({
+      repositories,
+      provider,
+      memory: createMemoryServices(repositories),
+      modelKey: "fake",
+      now: () => "2026-08-15T12:00:00.000Z",
+      rng: () => 0,
+    });
+    const result = await runtime.runInteractiveBurst({
+      job: context.job, messageId: context.messageId, threadId: context.threadId,
+      addressedAgentId: "agent-customer", wakeReason: "human_message",
+    });
+    expect(result.publicMessages).toBe(1);
+    expect(provider.calls.length).toBeGreaterThanOrEqual(2);
+    const turn = (await repositories.agentTurns.listByJob(context.job.id))[0];
+    expect(turn?.metadata.repairAttempts).toBe(1);
+    expect(turn?.metadata.grounding).toMatchObject({ required: true, satisfied: true });
+    const message = turn?.outputMessageId ? await repositories.messages.getById(turn.outputMessageId) : null;
+    expect(message?.contentText).toContain("تبدیل ایده");
   });
 
   it("supports bounded search-to-read-to-answer acquisition without provider-native tools", async () => {

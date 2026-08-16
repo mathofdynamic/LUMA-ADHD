@@ -40,8 +40,8 @@ GOD has no Telegram bot. A public summary, when explicitly enabled, is authored 
 
 The review output is strict JSON, with at most one repair attempt. Failed validation creates a failed review record and no partial evaluation set. Contributor labels are masked in the GOD prompt; the internal mapping is not sent to the provider.
 
-## Credential gate
+## OpenAI provider
 
-The repository contains no provider-specific GOD wire adapter because no provider has been selected in Phase 05. `GOD_API_KEY`, `GOD_BASE_URL`, and `GOD_MODEL` are reserved runtime configuration names. `.god-env` is ignored for future local operator setup. A real provider must be selected from its official documentation before live calls, deployment, or merge.
+The provider-neutral GOD service uses the verified OpenAI Responses adapter. Runtime configuration is `GOD_PROVIDER=openai`, `GOD_BASE_URL=https://api.openai.com/v1`, `GOD_MODEL=gpt-5.6-sol`, and `GOD_REASONING_EFFORT=high`; the credential is only `GOD_API_KEY`. Responses use `store=false`, strict JSON Schema output, bounded retries, and status/usage/request-ID normalization. The application never reads the operator-only `GPT_API_KEY` name.
 
 Automated tests use `FakeProvider` and never call GOD, Nebula, Telegram, or external knowledge URLs.

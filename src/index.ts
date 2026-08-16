@@ -5,7 +5,7 @@ import type {
   ScheduledController,
 } from "@cloudflare/workers-types";
 
-import { createAgentScheduler, createGodScheduler, createKnowledgeScheduler, createReputationScheduler } from "./agents/factory";
+import { createAgentScheduler, createGodScheduler, createKnowledgeScheduler, createReputationScheduler, isGodProviderConfigured } from "./agents/factory";
 import { routeApi } from "./api/router";
 import { consumeAgentJobs, type AgentJobMessage } from "./jobs";
 import { handleTelegramWebhook } from "./telegram/webhook";
@@ -45,10 +45,7 @@ const handler = {
       const result = await createAgentScheduler(env).tick();
       const knowledge = await createKnowledgeScheduler(env).tick();
       const reputation = await createReputationScheduler(env).tick();
-      // No provider-specific GOD adapter is enabled until the official
-      // provider contract and secret are supplied. The schedule state is
-      // still maintained without generating a call.
-      const god = await createGodScheduler(env, { enabled: false }).tick();
+      const god = await createGodScheduler(env, { enabled: isGodProviderConfigured(env) }).tick();
       console.log(JSON.stringify({
         event: "agent_scheduler_tick_completed",
         dueSchedule: result.dueSchedule,

@@ -2,7 +2,7 @@ import type { createRepositories } from "../database/repositories";
 import { nowIso } from "../database/ids";
 import { escapeTelegramHtml } from "../telegram/format";
 import type { TelegramApplicationService } from "../telegram";
-import { LLMProviderError, normalizeProviderError, type LLMGenerateResponse, type LLMProvider } from "../llm";
+import { LLMProviderError, normalizeProviderError, type LLMGenerateResponse, type LLMProvider, type LLMReasoningEffort } from "../llm";
 import { FOUNDATION_GUARDRAILS } from "../guardrails";
 import { ReputationService } from "../reputation/service";
 import { isNormalAgentId } from "../reputation/model";
@@ -15,7 +15,7 @@ import type {
   ReputationEventRecord,
 } from "../reputation/types";
 import { GodBriefingService } from "./briefing";
-import { GOD_REVIEW_OUTPUT_SCHEMA, GodReviewOutputValidationError, parseGodReviewOutput } from "./schema";
+import { GOD_REVIEW_JSON_SCHEMA, GOD_REVIEW_OUTPUT_SCHEMA, GodReviewOutputValidationError, parseGodReviewOutput } from "./schema";
 
 type GodRepositories = ReturnType<typeof createRepositories>;
 
@@ -23,6 +23,7 @@ export interface GodReviewServiceDependencies {
   readonly repositories: GodRepositories;
   readonly provider: LLMProvider;
   readonly modelKey: string;
+  readonly reasoningEffort?: LLMReasoningEffort;
   readonly reputation: ReputationService;
   readonly memory?: import("../memory").MemoryServices;
   readonly telegram?: Pick<TelegramApplicationService, "projectAgentMessage">;
@@ -127,21 +128,28 @@ export class GodReviewService {
     ].join("\n");
     let response: LLMGenerateResponse;
     let repairAttempts = 0;
+    let initialStartedAt = Date.now();
     try {
-      const started = Date.now();
+      initialStartedAt = Date.now();
       response = await this.dependencies.provider.generate({
         modelKey: this.dependencies.modelKey,
         systemPrompt,
         messages: [{ role: "user", content: GodBriefingService.toPromptText(briefing) }],
         temperature: 0,
-        maxOutputTokens: 1_500,
-        timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
+        maxOutputTokens: FOUNDATION_GUARDRAILS.godReviewMaxOutputTokens,
+        reasoningEffort: this.dependencies.reasoningEffort,
+        structuredOutput: {
+          name: "luma_god_review",
+          description: "A bounded, auditable LUMA ADHD supervisory review.",
+          schema: GOD_REVIEW_JSON_SCHEMA,
+        },
+        timeoutMs: FOUNDATION_GUARDRAILS.godProviderTimeoutMilliseconds,
         metadata: { role: "god", reviewId: review.id },
       });
-      await this.recordUsage(`god-provider-usage:${review.id}:initial`, input.jobId, response, undefined, Date.now() - started);
+      await this.recordUsage(`god-provider-usage:${review.id}:initial`, input.jobId, response, undefined, Date.now() - initialStartedAt);
     } catch (error: unknown) {
       const normalized = normalizeProviderError(error);
-      await this.recordUsage(`god-provider-usage:${review.id}:initial`, input.jobId, undefined, normalized, 0);
+      await this.recordUsage(`god-provider-usage:${review.id}:initial`, input.jobId, undefined, normalized, Math.max(0, Date.now() - initialStartedAt));
       const failed = await this.dependencies.repositories.reputation.failReview({ id: review.id, summary: safeFailure(normalized), repairAttempts: 0, providerName: this.dependencies.provider.name, modelName: this.dependencies.modelKey });
       return { review: failed, directives: [], evaluations: [], evidence: [], publicMessageId: null };
     }
@@ -152,22 +160,29 @@ export class GodReviewService {
     } catch (error: unknown) {
       if (!(error instanceof GodReviewOutputValidationError)) throw error;
       repairAttempts = 1;
+      let repairStartedAt = Date.now();
       try {
-        const started = Date.now();
+        repairStartedAt = Date.now();
         const repaired = await this.dependencies.provider.generate({
           modelKey: this.dependencies.modelKey,
           systemPrompt: `${systemPrompt}\nValidation errors: ${error.problems.join("; ")}\nReturn the corrected JSON once.`,
           messages: [{ role: "user", content: response.text.slice(0, 8_000) }],
           temperature: 0,
-          maxOutputTokens: 1_500,
-          timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
+          maxOutputTokens: FOUNDATION_GUARDRAILS.godReviewMaxOutputTokens,
+          reasoningEffort: this.dependencies.reasoningEffort,
+          structuredOutput: {
+            name: "luma_god_review",
+            description: "A bounded, auditable LUMA ADHD supervisory review.",
+            schema: GOD_REVIEW_JSON_SCHEMA,
+          },
+          timeoutMs: FOUNDATION_GUARDRAILS.godProviderTimeoutMilliseconds,
           metadata: { role: "god", reviewId: review.id, repair: "true" },
         });
-        await this.recordUsage(`god-provider-usage:${review.id}:repair`, input.jobId, repaired, undefined, Date.now() - started);
+        await this.recordUsage(`god-provider-usage:${review.id}:repair`, input.jobId, repaired, undefined, Date.now() - repairStartedAt);
         output = parseGodReviewOutput(repaired.text);
         response = repaired;
       } catch (repairError: unknown) {
-        if (repairError instanceof LLMProviderError) await this.recordUsage(`god-provider-usage:${review.id}:repair`, input.jobId, undefined, repairError, 0);
+        if (repairError instanceof LLMProviderError) await this.recordUsage(`god-provider-usage:${review.id}:repair`, input.jobId, undefined, repairError, Math.max(0, Date.now() - repairStartedAt));
         const failed = await this.dependencies.repositories.reputation.failReview({ id: review.id, summary: repairError instanceof Error ? repairError.message.slice(0, 500) : "GOD structured output validation failed", repairAttempts });
         return { review: failed, directives: [], evaluations: [], evidence: [], publicMessageId: null };
       }

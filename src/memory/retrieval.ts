@@ -327,6 +327,13 @@ export class ContextPackService {
         totalRetrievedCharacters: items.reduce((sum, item) => sum + item.excerpt.length, 0),
         contextTruncated: truncated,
         acquisitionOperations: 0,
+        selectedSources: items.slice(0, 16).map((item) => ({
+          type: item.type,
+          sourceId: item.sourceId,
+          title: item.title,
+          pathOrUrl: item.pathOrUrl,
+          authority: item.authority,
+        })),
       },
     };
   }

@@ -11,6 +11,8 @@ coverage/
 .nebula-env
 .god-env
 .nebula-smoke.bundle.mjs
+.openai-god-smoke.bundle.mjs
+phase05-live-smoke-*.wrangler.jsonc
 
 # Other local environment files.
 .env

@@ -52,6 +52,13 @@ export interface ContextPackTelemetry {
   readonly totalRetrievedCharacters: number;
   readonly contextTruncated: boolean;
   readonly acquisitionOperations: number;
+  readonly selectedSources?: readonly {
+    readonly type: MemoryItemType;
+    readonly sourceId: string;
+    readonly title: string;
+    readonly pathOrUrl: string | null;
+    readonly authority: number;
+  }[];
 }
 
 export interface DocumentCreateRequest {

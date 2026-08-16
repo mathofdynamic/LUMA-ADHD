@@ -36,6 +36,7 @@ import type { TelegramApplicationService } from "../telegram";
 import { ContextPackService } from "../memory/retrieval";
 import type { MemoryServices } from "../memory";
 import type { ReputationService } from "../reputation/service";
+import { assessOfficialGrounding, type OfficialGroundingAssessment } from "./grounding";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
@@ -121,6 +122,7 @@ function actionMetadata(
   repairAttempts: number,
   retrievalTelemetry?: JsonObject,
   acquisitionOperations = 0,
+  grounding?: OfficialGroundingAssessment,
 ): JsonObject {
   return {
     intent: action.intent,
@@ -131,7 +133,24 @@ function actionMetadata(
     repairAttempts,
     retrieval: retrievalTelemetry ? { ...retrievalTelemetry, acquisitionOperations } : {},
     acquisitionOperations,
+    grounding: grounding ? {
+      required: grounding.required,
+      satisfied: grounding.satisfied,
+      sourceIds: grounding.sourceIds,
+      matchedTerms: grounding.matchedTerms,
+      bestSourceMatchCount: grounding.bestSourceMatchCount,
+    } : {},
     actionMetadata: action.metadata,
+  };
+}
+
+function groundingMetadata(grounding: OfficialGroundingAssessment): JsonObject {
+  return {
+    required: grounding.required,
+    satisfied: grounding.satisfied,
+    sourceIds: grounding.sourceIds,
+    matchedTerms: grounding.matchedTerms,
+    bestSourceMatchCount: grounding.bestSourceMatchCount,
   };
 }
 
@@ -514,6 +533,9 @@ export class AgentRuntimeService {
     const retrievalTelemetry: JsonObject = {
       ...contextPack.telemetry,
       sourceTypeCounts: { ...contextPack.telemetry.sourceTypeCounts },
+      selectedSources: contextPack.telemetry.selectedSources
+        ? contextPack.telemetry.selectedSources.map((source) => ({ ...source }))
+        : [],
     };
     const participants = [
       ...context.profiles.map((profile) => ({
@@ -620,6 +642,13 @@ export class AgentRuntimeService {
     };
 
     let step: AgentStep;
+    let grounding: OfficialGroundingAssessment = {
+      required: false,
+      satisfied: true,
+      sourceIds: [],
+      matchedTerms: [],
+      bestSourceMatchCount: 0,
+    };
     try {
       response = await callProvider(
         prompt.systemPrompt,
@@ -658,12 +687,50 @@ export class AgentRuntimeService {
         ({ step, response } = await parseWithRepair(response));
       }
       if (step.kind !== "action") throw new AgentAcquisitionValidationError(["a final action is required after acquisition"]);
+      if (step.action.intent === "SPEAK") {
+        grounding = assessOfficialGrounding(step.action.content ?? "", contextPack);
+        if (grounding.required && !grounding.satisfied) {
+          if (repairAttempts >= 1) {
+            throw new AgentActionValidationError(["SPEAK did not contain enough distinctive material from retrieved official LUMA knowledge"]);
+          }
+          repairAttempts = 1;
+          const repaired = await callProvider(
+            [
+              "You are repairing one LUMA ADHD answer that failed the official-source grounding check.",
+              "Return exactly one final SPEAK action as JSON. Do not return an acquisition step.",
+              "Use only claims supported by the retrieved official_luma_knowledge excerpts below.",
+              "If the excerpts do not establish a requested fact, state that the current official context is insufficient instead of using generic model memory.",
+              `retrieved_official_sources: ${grounding.sourceIds.join(", ") || "none"}`,
+              `retrieved_context:\n${ContextPackService.toPromptText(contextPack)}`,
+              `grounding_validation: matched_terms=${grounding.matchedTerms.join(", ") || "none"}; best_source_match_count=${grounding.bestSourceMatchCount}`,
+              TELEGRAM_PRESENTATION_GUIDANCE,
+              AGENT_STEP_SCHEMA,
+              "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
+              "Do not include citations or source IDs in the visible message unless naturally useful; provenance is retained internally.",
+              "Do not add prose, Markdown fences, or hidden reasoning.",
+            ].join("\n"),
+            [{ role: "user", content: "Return the grounded final SPEAK action now." }],
+            "grounding-repair",
+            512,
+            { repair: "grounding", agentId: agent.id, threadId: thread.id },
+          );
+          ({ step, response } = await parseWithRepair(repaired));
+          if (step.kind !== "action" || step.action.intent !== "SPEAK") {
+            throw new AgentActionValidationError(["grounding repair must return a final SPEAK action"]);
+          }
+          grounding = assessOfficialGrounding(step.action.content ?? "", contextPack);
+          if (grounding.required && !grounding.satisfied) {
+            throw new AgentActionValidationError(["grounding repair still did not use retrieved official LUMA knowledge"]);
+          }
+        }
+      }
     } catch (error: unknown) {
       if (error instanceof LLMProviderError) {
         await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
           mode: context.wakeReason,
           providerFailure: safeErrorSummary(error),
           retrieval: retrievalTelemetry,
+          grounding: groundingMetadata(grounding),
           acquisitionOperations,
         });
         return { action: null, outputMessageId: undefined, wait: false, retryableFailure: error.failure.retryable, stopBurst: true };
@@ -676,6 +743,7 @@ export class AgentRuntimeService {
         repairAttempts,
         validationErrors: summary.slice(0, 5),
         retrieval: retrievalTelemetry,
+        grounding: groundingMetadata(grounding),
         acquisitionOperations,
       });
       await this.dependencies.repositories.events.append({
@@ -701,7 +769,7 @@ export class AgentRuntimeService {
       deliveryStatus = execution.deliveryStatus;
     } catch (error: unknown) {
       await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
-        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations),
+        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding),
         executionFailure: safeErrorSummary(error),
       });
       await this.dependencies.repositories.events.append({
@@ -722,7 +790,7 @@ export class AgentRuntimeService {
       "completed",
       outputMessageId,
       {
-        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations),
+        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding),
         provider: response.provider,
         model: response.model,
         requestId: response.requestId ?? null,

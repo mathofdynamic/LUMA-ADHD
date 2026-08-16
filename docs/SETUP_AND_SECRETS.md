@@ -14,7 +14,7 @@ These values identify a resource or select behavior. They are not authentication
 - `TELEGRAM_ADMIN_USER_IDS` - comma-separated Telegram user identifiers allowed to perform privileged actions.
 - `TELEGRAM_BOT_IDENTITIES_JSON` - safe JSON metadata for deterministic bot-to-agent mapping. Store Telegram bot IDs and usernames here, never tokens. Empty `{}` is valid.
 - `NEBULA_BASE_URL` and `NEBULA_MODEL` - normal-model provider endpoint and model identifier.
-- `GOD_BASE_URL` and `GOD_MODEL` - frontier-provider endpoint and model identifier.
+- `GOD_PROVIDER`, `GOD_BASE_URL`, `GOD_MODEL`, and `GOD_REASONING_EFFORT` - the selected frontier-provider contract and reasoning policy. Phase 05 currently uses the verified OpenAI adapter with `gpt-5.6-sol` and `high` effort.
 - `database_name`, `queue`, and Worker `name` in `wrangler.jsonc` - safe Cloudflare resource names.
 - `database_id` in `wrangler.jsonc` - a safe D1 resource identifier populated after the real database is created.
 
@@ -83,7 +83,7 @@ npx wrangler secret put GOD_API_KEY
 npx wrangler secret put ADMIN_AUTH_SECRET
 ```
 
-Use the appropriate Worker environment when staging and production configuration are introduced. Do not use `.dev.vars` as a production deployment mechanism. GOD requires a provider-specific API contract and secret before live execution. It never requires a Telegram GOD bot or `TELEGRAM_GOD_BOT_TOKEN`.
+Use the appropriate Worker environment when staging and production configuration are introduced. Do not use `.dev.vars` as a production deployment mechanism. `GOD_PROVIDER`, `GOD_BASE_URL`, `GOD_MODEL`, and `GOD_REASONING_EFFORT` are ordinary Worker configuration; `GOD_API_KEY` remains the only provider credential. GOD never requires a Telegram GOD bot or `TELEGRAM_GOD_BOT_TOKEN`.
 
 Automatic deployment may later use a restricted Cloudflare API token stored as a GitHub Actions secret. That token is separate from application runtime secrets and should have only the account permissions required to deploy this Worker. Phase 05 does not create or use it.
 
@@ -121,6 +121,8 @@ powershell -File .\scripts\telegram-smoke.ps1 -Persona product -Message '<contro
 powershell -File .\scripts\agent-ambient-smoke.ps1 -GroupId '<telegram group id>'
 ```
 
+`god-review-smoke.ps1` is the operator-only GOD review harness. It uses the application service against remote D1, requires the configured `GOD_API_KEY` only in the local child Worker process, and never exposes a public smoke endpoint. It supports a fake-provider test locally and a single real review after the verified provider is configured.
+
 ## Credential timeline
 
 | Phase | Required configuration | Real secrets required? |
@@ -128,7 +130,7 @@ powershell -File .\scripts\agent-ambient-smoke.ps1 -GroupId '<telegram group id>
 | Phase 00 | Local Worker, local D1/Queue simulation, empty config contract | No |
 | Phase 02 | Telegram group ID, admin user IDs, gateway/persona bot identities, bot tokens, webhook secret for live activation | Yes only for live Telegram activation; fakes are sufficient for code/tests |
 | Phase 03 | Nebula API key, base URL, and model configuration | Yes, Nebula key |
-| Phase 05 | GOD provider protocol, API key, base URL, and model configuration; no GOD Telegram bot | Yes, only after provider is selected |
+| Phase 05 | OpenAI provider protocol, `GOD_MODEL`, `GOD_BASE_URL`, `GOD_REASONING_EFFORT`, and `GOD_API_KEY`; no GOD Telegram bot | Yes, for the single live GOD review |
 | Phase 06+ | Production admin authentication secret | Yes, admin secret |
 | Phase 08 | Restricted Cloudflare API token if automatic deployment is enabled | Only if CI/CD is enabled |
 

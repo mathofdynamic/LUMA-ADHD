@@ -144,6 +144,7 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     `persistent_workspace: /agents/${context.agent.slug}/ (private by default); /shared/ (organizational); explicitly shared documents are accessible through validated application operations.`,
     "memory_capability: Automatic bounded retrieval runs before every meaningful turn. You can request a bounded search/read acquisition when the supplied context is insufficient. Search before creating durable work when practical.",
     "grounding_policy: Use supplied authoritative LUMA knowledge for current company/product facts. Official LUMA material outranks generic model memory, unsupported assumptions, and stale casual discussion. Distinguish CURRENT OFFICIAL FACT from PROPOSED CHANGE or OPINION. If stored evidence is insufficient, state uncertainty or acquire more information; do not invent LUMA facts.",
+    "grounding_execution: When the retrieval telemetry includes official LUMA knowledge for a factual company/product question, base factual claims on those excerpts. Do not replace them with a generic definition. If the excerpts do not support a claim, qualify it or acquire more information.",
     `retrieval_telemetry: ${context.retrievalTelemetry ? JSON.stringify(context.retrievalTelemetry) : "none"}`,
     `bounded_retrieval_context:\n${context.retrievedContext ?? "none"}`,
     `bounded_acquisition_results:\n${context.acquisitionContext?.join("\n\n") || "none"}`,

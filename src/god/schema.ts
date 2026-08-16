@@ -17,6 +17,82 @@ export const GOD_REVIEW_OUTPUT_SCHEMA = `{
   "public_summary": "optional concise Telegram summary"
 }`;
 
+// OpenAI Structured Outputs requires every property to be declared in the
+// required list when strict mode is enabled. Nullable fields preserve the
+// provider-neutral parser's optional semantics without making the wire output
+// ambiguous.
+export const GOD_REVIEW_JSON_SCHEMA: Readonly<Record<string, unknown>> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    executive_summary: { type: "string", maxLength: 2_000 },
+    important_findings: { type: "array", items: { type: "string", maxLength: 600 }, maxItems: 12 },
+    weak_reasoning: { type: "array", items: { type: "string", maxLength: 600 }, maxItems: 12 },
+    unsupported_assumptions: { type: "array", items: { type: "string", maxLength: 600 }, maxItems: 12 },
+    high_value_work: { type: "array", items: { type: "string", maxLength: 600 }, maxItems: 12 },
+    unresolved_risks: { type: "array", items: { type: "string", maxLength: 600 }, maxItems: 12 },
+    missing_perspectives: { type: "array", items: { type: "string", maxLength: 600 }, maxItems: 12 },
+    thread_recommendations: {
+      type: "array",
+      maxItems: 12,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          thread_id: { type: ["string", "null"] },
+          recommendation: { type: "string", maxLength: 700 },
+        },
+        required: ["thread_id", "recommendation"],
+      },
+    },
+    agent_evaluations: {
+      type: "array",
+      maxItems: 20,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          agent_id: { type: "string", enum: [
+            "agent-product", "agent-growth", "agent-creative", "agent-technical",
+            "agent-finance", "agent-customer", "agent-operations", "agent-heretic",
+          ] },
+          domain: { type: "string", enum: [
+            "product_strategy", "growth", "ux_creative", "engineering_architecture",
+            "finance_pricing", "customer_experience", "operations", "critical_analysis", "general",
+          ] },
+          dimension: { type: "string", enum: ["epistemic", "contribution", "outcome", "collaboration"] },
+          signal: { type: "number", minimum: -1, maximum: 1 },
+          rationale: { type: "string", maxLength: 500 },
+          source_message_id: { type: ["string", "null"] },
+        },
+        required: ["agent_id", "domain", "dimension", "signal", "rationale", "source_message_id"],
+      },
+    },
+    human_required: { type: "array", items: { type: "string", maxLength: 600 }, maxItems: 12 },
+    directives: {
+      type: "array",
+      maxItems: 12,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          target_agent_id: { type: ["string", "null"] },
+          target_thread_id: { type: ["string", "null"] },
+          directive: { type: "string", maxLength: 700 },
+          priority: { type: "integer", minimum: 0, maximum: 100 },
+        },
+        required: ["target_agent_id", "target_thread_id", "directive", "priority"],
+      },
+    },
+    public_summary: { type: ["string", "null"], maxLength: 1_600 },
+  },
+  required: [
+    "executive_summary", "important_findings", "weak_reasoning", "unsupported_assumptions",
+    "high_value_work", "unresolved_risks", "missing_perspectives", "thread_recommendations",
+    "agent_evaluations", "human_required", "directives", "public_summary",
+  ],
+};
+
 export class GodReviewOutputValidationError extends ValidationError {
   readonly problems: readonly string[];
 

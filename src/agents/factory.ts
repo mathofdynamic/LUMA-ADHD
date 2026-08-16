@@ -1,6 +1,13 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { createRepositories } from "../database/repositories";
-import { NebulaProvider, DEFAULT_NEBULA_MODEL, VERIFIED_NEBULA_BASE_URL, type LLMProvider } from "../llm";
+import {
+  NebulaProvider,
+  OpenAIProvider,
+  DEFAULT_NEBULA_MODEL,
+  VERIFIED_NEBULA_BASE_URL,
+  type LLMProvider,
+  type LLMReasoningEffort,
+} from "../llm";
 import { createTelegramApplication, TelegramBotApiTransport, parseTelegramConfig } from "../telegram";
 import { AgentRuntimeService, type AgentRuntimeDependencies } from "./runtime";
 import { AgentScheduler, type AgentJobQueue } from "./scheduler";
@@ -30,8 +37,32 @@ export interface AgentRuntimeEnvironment {
   readonly TELEGRAM_OPERATIONS_BOT_TOKEN?: string;
   readonly TELEGRAM_HERETIC_BOT_TOKEN?: string;
   readonly GOD_API_KEY?: string;
+  readonly GOD_PROVIDER?: string;
   readonly GOD_BASE_URL?: string;
   readonly GOD_MODEL?: string;
+  readonly GOD_REASONING_EFFORT?: string;
+}
+
+const GOD_REASONING_EFFORTS: readonly LLMReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+export function parseGodReasoningEffort(value: string | undefined): LLMReasoningEffort | undefined {
+  const normalized = value?.trim().toLowerCase() as LLMReasoningEffort | undefined;
+  return normalized !== undefined && GOD_REASONING_EFFORTS.includes(normalized) ? normalized : undefined;
+}
+
+function createConfiguredGodProvider(env: AgentRuntimeEnvironment): LLMProvider | undefined {
+  if (env.GOD_PROVIDER?.trim().toLowerCase() !== "openai") return undefined;
+  if (!env.GOD_API_KEY?.trim() || !env.GOD_MODEL?.trim()) return undefined;
+  return new OpenAIProvider({
+    apiKey: env.GOD_API_KEY,
+    baseUrl: env.GOD_BASE_URL,
+    model: env.GOD_MODEL,
+    maxAttempts: 1,
+  });
+}
+
+export function isGodProviderConfigured(env: AgentRuntimeEnvironment): boolean {
+  return createConfiguredGodProvider(env) !== undefined;
 }
 
 export function createAgentRuntime(
@@ -79,7 +110,8 @@ export function createGodReviewService(
     readonly now?: () => string;
   } = {},
 ): GodReviewService | null {
-  if (!options.provider || !env.GOD_MODEL) return null;
+  const provider = options.provider ?? createConfiguredGodProvider(env);
+  if (!provider || !env.GOD_MODEL) return null;
   const repositories = createRepositories(env.DB);
   const reputation = new ReputationService({ repositories, now: options.now });
   const memory = createMemoryServices(repositories, {
@@ -95,8 +127,9 @@ export function createGodReviewService(
   });
   return new GodReviewService({
     repositories,
-    provider: options.provider,
+    provider,
     modelKey: env.GOD_MODEL,
+    reasoningEffort: parseGodReasoningEffort(env.GOD_REASONING_EFFORT),
     reputation,
     memory,
     telegram,
