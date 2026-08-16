@@ -370,4 +370,43 @@ export class JobRepository {
 
     return results[0]?.meta.changes ?? 0;
   }
+
+  async retryFailed(id: string, asOf = nowIso()): Promise<JobRecord> {
+    const result = await this.database.prepare(
+      `UPDATE jobs SET status = 'retry_scheduled', due_at = ?, last_error = NULL,
+         lease_owner = NULL, lease_expires_at = NULL, completed_at = NULL,
+         cancelled_at = NULL, updated_at = ?
+       WHERE id = ? AND status IN ('failed', 'retry_scheduled') AND attempt_count < max_attempts`,
+    ).bind(asOf, asOf, id).run();
+    if (result.meta.changes !== 1) {
+      const existing = await this.getById(id);
+      if (existing.status === "completed") return existing;
+      throw new ValidationError(`job '${id}' is not eligible for retry`);
+    }
+    return this.getById(id);
+  }
+
+  async recoverStaleById(id: string, asOf = nowIso(), nextDueAt = asOf): Promise<JobRecord> {
+    const result = await this.database.prepare(
+      `UPDATE jobs SET
+         status = CASE WHEN attempt_count >= max_attempts THEN 'failed' ELSE 'retry_scheduled' END,
+         due_at = CASE WHEN attempt_count >= max_attempts THEN due_at ELSE ? END,
+         lease_owner = NULL, lease_expires_at = NULL,
+         last_error = 'stale lease recovered', updated_at = ?
+       WHERE id = ? AND status = 'claimed'
+         AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`,
+    ).bind(nextDueAt, asOf, id, asOf).run();
+    if (result.meta.changes !== 1) {
+      const existing = await this.getById(id);
+      if (existing.status === "claimed") throw new ValidationError(`job '${id}' still has an active lease`);
+      return existing;
+    }
+    await this.database.prepare(
+      `UPDATE job_runs SET status = 'abandoned', finished_at = ?, error_summary = 'stale lease recovered'
+       WHERE job_id = ? AND status = 'claimed' AND attempt_number = (
+         SELECT attempt_count FROM jobs WHERE id = ?
+       )`,
+    ).bind(asOf, id, id).run();
+    return this.getById(id);
+  }
 }

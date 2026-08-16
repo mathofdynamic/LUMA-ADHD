@@ -114,6 +114,8 @@ export class TelegramTransportError extends Error {
 }
 
 export interface TelegramTransport {
+  /** Real Bot API transport requires a configured bot token; test/operator transports may not. */
+  readonly requiresBotToken?: boolean;
   sendTextMessage(input: TelegramSendTextInput): Promise<TelegramSentMessage>;
 }
 
@@ -124,6 +126,8 @@ export interface TelegramInboundResult {
   readonly threadId?: string;
   readonly jobId?: string;
   readonly addressedAgentId?: string | null;
+  readonly humanTaskId?: string;
+  readonly humanTaskResolved?: boolean;
 }
 
 export interface TelegramAgentProjectionInput {

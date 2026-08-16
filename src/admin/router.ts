@@ -9,8 +9,11 @@ import {
 import { adminServices, isThreadState } from "./service";
 import { ADMIN_SETTING_DEFINITIONS } from "./settings";
 import type { JsonObject } from "../database/validation";
+import { createRepositories } from "../database/repositories";
+import { createTelegramApplication, parseTelegramConfig, TelegramBotApiTransport } from "../telegram";
+import type { TelegramRuntimeEnv } from "../telegram/webhook";
 
-export interface AdminApiEnvironment {
+export interface AdminApiEnvironment extends Partial<Omit<TelegramRuntimeEnv, "DB">> {
   readonly DB?: D1Database;
   readonly AGENT_JOBS?: { send(message: AgentJobMessage): Promise<unknown> };
   readonly ADMIN_AUTH_SECRET?: string;
@@ -23,8 +26,6 @@ export interface AdminApiEnvironment {
   readonly GOD_REASONING_EFFORT?: string;
   readonly NEBULA_MODEL?: string;
   readonly NEBULA_API_KEY?: string;
-  readonly TELEGRAM_GATEWAY_BOT_TOKEN?: string;
-  readonly TELEGRAM_GROUP_ID?: string;
 }
 
 interface JsonBody {
@@ -149,6 +150,19 @@ async function requireAuthenticated(
   if (!environment.DB) throw new AdminAuthError("not_configured", "admin database is not configured");
   const auth = new AdminAuthService(environment.DB, environment);
   const session = await auth.requireSession(request);
+  let telegramApplication: ReturnType<typeof createTelegramApplication> | undefined;
+  if (environment.TELEGRAM_GROUP_ID && environment.TELEGRAM_BOT_IDENTITIES_JSON) {
+    try {
+      const telegramConfig = parseTelegramConfig(environment);
+      telegramApplication = createTelegramApplication({
+        repositories: createRepositories(environment.DB),
+        config: telegramConfig,
+        transport: new TelegramBotApiTransport(telegramConfig),
+      });
+    } catch {
+      telegramApplication = undefined;
+    }
+  }
   return {
     auth,
     session,
@@ -161,6 +175,8 @@ async function requireAuthenticated(
       telegramConfigured: Boolean(environment.TELEGRAM_GATEWAY_BOT_TOKEN && environment.TELEGRAM_GROUP_ID),
       nebulaConfigured: Boolean(environment.NEBULA_API_KEY && environment.NEBULA_MODEL),
       adminConfigured: Boolean(environment.ADMIN_AUTH_SECRET),
+      telegramGroupId: environment.TELEGRAM_GROUP_ID,
+      telegramApplication,
     }),
   };
 }
@@ -303,11 +319,42 @@ async function handleAuthenticated(
   }
 
   if (resource === "human-tasks" && request.method === "GET" && !id) return response({ items: await services.listHumanTasks({ status: query(request, "status"), limit: query(request, "limit") }) });
+  if (resource === "human-tasks" && id === "phase07-smoke" && request.method === "POST") {
+    const smoke = await services.createPhase07HumanTaskSmoke();
+    await services.audit(session.id, "human_task.phase07_smoke_created", "human_task", typeof smoke.task === "object" && smoke.task !== null && "id" in smoke.task ? String(smoke.task.id) : "unknown", { reused: smoke.reused === true });
+    return response(smoke, smoke.reused === true ? 200 : 201);
+  }
   if (resource === "human-tasks" && id && request.method === "PATCH") {
     const body = await readJson(request);
     const task = await services.updateHumanTask(id, stringField(body, "status"), optionalString(body, "resolution"));
+    if (typeof task.wakeJob === "object" && task.wakeJob !== null) await queueJob(environment, services, asObject(task.wakeJob));
     await services.audit(session.id, "human_task.status_updated", "human_task", id, { status: stringField(body, "status") });
     return response(task);
+  }
+
+  if (resource === "artifacts" && request.method === "GET" && !id) {
+    return response({ items: await services.listArtifacts({ limit: query(request, "limit"), includeDeleted: query(request, "deleted") === "true" }) });
+  }
+  if (resource === "artifacts" && id === "phase07-smoke" && request.method === "POST") {
+    const smoke = await services.createPhase07DiagramSmoke();
+    await services.audit(session.id, "artifact.phase07_smoke_created", "artifact", typeof smoke.artifact === "object" && smoke.artifact !== null && "id" in smoke.artifact ? String(smoke.artifact.id) : "unknown", { reused: smoke.reused === true });
+    return response(smoke, smoke.reused === true ? 200 : 201);
+  }
+  if (resource === "artifacts" && id && request.method === "GET" && parts.length === 2) return response(await services.artifactDetail(id));
+  if (resource === "artifacts" && id && parts[2] === "render" && request.method === "POST") {
+    const artifact = await services.renderArtifact(id);
+    await services.audit(session.id, "artifact.render_requested", "artifact", id, { status: artifact.renderStatus });
+    return response(artifact);
+  }
+  if (resource === "artifacts" && id && parts[2] === "archive" && request.method === "POST") {
+    const artifact = await services.diagrams.archive(id);
+    await services.audit(session.id, "artifact.archived", "artifact", id, {});
+    return response(artifact);
+  }
+  if (resource === "artifacts" && id && parts[2] === "restore" && request.method === "POST") {
+    const artifact = await services.diagrams.restore(id);
+    await services.audit(session.id, "artifact.restored", "artifact", id, {});
+    return response(artifact);
   }
 
   if (resource === "reputation" && request.method === "GET" && !id) return response({ items: await services.reputationOverview(query(request, "domain")) });
@@ -326,6 +373,13 @@ async function handleAuthenticated(
     await queueJob(environment, services, job);
     await services.audit(session.id, "god.review_queued", "god_review", String(job.id), { jobId: job.id });
     return response({ state: "queued", job });
+  }
+
+  if (resource === "system" && id && (parts[2] === "retry" || parts[2] === "recover") && request.method === "POST") {
+    const job = parts[2] === "retry" ? await services.retryJob(id) : await services.recoverStaleJob(id);
+    await services.audit(session.id, parts[2] === "retry" ? "job.retry_requested" : "job.stale_recovered", "job", id, { status: job.status });
+    if (parts[2] === "retry") await queueJob(environment, services, job);
+    return response({ state: parts[2] === "retry" ? "queued" : "recovered", job });
   }
 
   if (resource === "system" && request.method === "GET") return response(await services.listSystem());

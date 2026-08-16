@@ -11,6 +11,8 @@ import type {
   NormalizedTelegramUpdate,
   TelegramInboundResult,
 } from "./types";
+import { HumanTaskService } from "../human-tasks";
+import { DatabaseError } from "../database/errors";
 
 type TelegramRepositories = ReturnType<typeof createRepositories>;
 
@@ -112,6 +114,25 @@ export class TelegramInboundService {
     );
     const jobKey = `telegram-interactive:${botAlias}:${update.updateId}`;
     if (existing) {
+      const existingTaskId = typeof existing.metadata.humanTaskId === "string" ? existing.metadata.humanTaskId : null;
+      if (existingTaskId) {
+        const existingTask = await this.dependencies.repositories.humanTasks.getById(existingTaskId).catch(() => null);
+        if (existingTask?.wakeJobId) {
+          return {
+            status: "duplicate",
+            messageId: existing.id,
+            threadId: existing.threadId,
+            jobId: existingTask.wakeJobId,
+            humanTaskId: existingTask.id,
+            humanTaskResolved: true,
+            addressedAgentId: existing.metadata.addressedAgentId === null
+              ? null
+              : typeof existing.metadata.addressedAgentId === "string"
+                ? existing.metadata.addressedAgentId
+                : null,
+          };
+        }
+      }
       const existingJob = await this.dependencies.repositories.jobs.getByIdempotencyKey(jobKey).catch(() => null);
       const job = existingJob ?? await this.dependencies.repositories.jobs.create({
         jobType: "telegram.interactive_message",
@@ -180,6 +201,9 @@ export class TelegramInboundService {
           update.replyTo.telegramMessageId,
         )
       : null;
+    const repliedHumanTaskId = repliedMessage && typeof repliedMessage.metadata.humanTaskId === "string"
+      ? repliedMessage.metadata.humanTaskId
+      : null;
     let addressedAgentId = replyAgentId(
       this.dependencies.config,
       update,
@@ -238,10 +262,49 @@ export class TelegramInboundService {
         telegramMessageId: update.messageId,
         telegramUpdateId: update.updateId,
         addressedAgentId,
+        humanTaskId: repliedHumanTaskId,
         topicId: update.topicId ?? null,
       },
     });
     await this.dependencies.repositories.threads.touchActivity(thread.id, receivedAt);
+
+    if (repliedHumanTaskId) {
+      try {
+        const resolved = await new HumanTaskService({
+          repositories: this.dependencies.repositories,
+          now: this.now,
+        }).resolveFromResponse({
+          taskId: repliedHumanTaskId,
+          threadId: thread.id,
+          responseText: update.text,
+          responseMessageId: message.id,
+          responderUserId: user.id,
+          responseSource: "telegram",
+          responseMetadata: { telegramUpdateId: update.updateId, telegramMessageId: update.messageId },
+        });
+        if (resolved.wakeJob) {
+          return {
+            status: "accepted",
+            messageId: message.id,
+            threadId: thread.id,
+            jobId: resolved.wakeJob.id,
+            addressedAgentId: repliedMessage?.authorAgentId ?? addressedAgentId,
+            humanTaskId: repliedHumanTaskId,
+            humanTaskResolved: !resolved.alreadyResolved,
+          };
+        }
+      } catch (error: unknown) {
+        if (!(error instanceof DatabaseError)) throw error;
+        await this.dependencies.repositories.events.append({
+          eventType: "human_task.mapping_failed",
+          aggregateType: "message",
+          aggregateId: message.id,
+          threadId: thread.id,
+          idempotencyKey: `human-task-mapping-failed:${message.id}`,
+          payload: { taskId: repliedHumanTaskId, error: error.message.slice(0, 240) },
+        });
+      }
+    }
 
     const job = await this.dependencies.repositories.jobs.create({
       jobType: "telegram.interactive_message",
@@ -266,6 +329,8 @@ export class TelegramInboundService {
       threadId: thread.id,
       jobId: job.id,
       addressedAgentId,
+      humanTaskId: repliedHumanTaskId ?? undefined,
+      humanTaskResolved: false,
     };
   }
 }
