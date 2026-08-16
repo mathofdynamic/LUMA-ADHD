@@ -6,7 +6,7 @@ import { ThreadSummaryService } from "./summary";
 import type { LLMProvider } from "../llm";
 import type { MemoryRecord } from "./legacy-types";
 
-export type { MemoryActor, ContextPack, ContextPackItem, MemoryItemType } from "./types";
+export type { MemoryActor, ContextPack, ContextPackItem, ContextPackTelemetry, MemoryItemType } from "./types";
 export * from "./paths";
 export * from "./document-service";
 export * from "./fts";

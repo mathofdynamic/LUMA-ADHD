@@ -1,9 +1,11 @@
 import type { createRepositories } from "../database/repositories";
 import { ValidationError } from "../database/errors";
+import { requireLimit } from "../database/validation";
 import type { JsonObject } from "../database/validation";
 import { canonicalizeLogicalPath, pathScope, pathSegments } from "./paths";
 import type { DocumentRecord, DocumentWithCurrentVersion } from "../database/types";
 import type { MemoryActor } from "./types";
+import { InstitutionalMemorySearch } from "./retrieval";
 
 type Repositories = ReturnType<typeof createRepositories>;
 
@@ -12,7 +14,11 @@ function unauthorized(): never {
 }
 
 export class DocumentService {
-  constructor(private readonly repositories: Repositories) {}
+  private readonly searchService: InstitutionalMemorySearch;
+
+  constructor(private readonly repositories: Repositories) {
+    this.searchService = new InstitutionalMemorySearch(repositories.database);
+  }
 
   async create(input: {
     readonly actor?: MemoryActor;
@@ -93,6 +99,53 @@ export class DocumentService {
     return this.repositories.documents.listVersions(document.id);
   }
 
+  async readVersion(input: {
+    readonly logicalPath: string;
+    readonly versionNumber: number;
+    readonly actor?: MemoryActor;
+  }) {
+    if (!Number.isInteger(input.versionNumber) || input.versionNumber < 1 || input.versionNumber > 500) {
+      throw new ValidationError("document version must be an integer between 1 and 500");
+    }
+    const document = await this.getIncludingDeleted(input.logicalPath);
+    await this.assertReadAccess(document, input.actor);
+    const version = await this.repositories.documents.getVersion(document.id, input.versionNumber);
+    if (!version) throw new ValidationError("document version was not found");
+    return version;
+  }
+
+  async search(input: {
+    readonly query: string;
+    readonly actor?: MemoryActor;
+    readonly threadId?: string;
+    readonly limit?: number;
+  }) {
+    if (typeof input.query !== "string" || input.query.trim().length === 0) return [];
+    const matches = await this.searchService.search(input.query, {
+      agentId: input.actor?.agentId,
+      threadId: input.threadId,
+      topK: requireLimit(input.limit ?? 5, "document search limit", 20),
+      sourceKinds: ["document"],
+    });
+    return matches.filter((match) => match.type === "document");
+  }
+
+  async list(input: {
+    readonly actor?: MemoryActor;
+    readonly threadId?: string;
+    readonly includeDeleted?: boolean;
+    readonly limit?: number;
+  } = {}) {
+    if (!input.actor?.system && !input.actor?.agentId && !input.actor?.userId) unauthorized();
+    return this.repositories.documents.listAccessible({
+      agentId: input.actor?.agentId,
+      threadId: input.threadId,
+      system: input.actor?.system,
+      includeDeleted: input.includeDeleted,
+      limit: input.limit,
+    });
+  }
+
   async delete(logicalPath: string, actor?: MemoryActor): Promise<void> {
     const document = await this.getActive(logicalPath);
     await this.assertWriteAccess(document, actor);
@@ -131,6 +184,7 @@ export class DocumentService {
     readonly targetAgentId: string;
   }) {
     const document = await this.getActive(input.logicalPath);
+    if (!input.actor?.system && !input.actor?.agentId && !input.actor?.userId) unauthorized();
     if (!input.actor?.system && input.actor?.agentId !== document.ownerAgentId && document.scope !== "shared") unauthorized();
     return this.repositories.documents.share({
       documentId: document.id,
@@ -183,6 +237,7 @@ export class DocumentService {
   }
 
   private async assertReadAccess(document: DocumentRecord, actor?: MemoryActor): Promise<void> {
+    if (!actor?.system && !actor?.agentId && !actor?.userId) unauthorized();
     if (actor?.system || document.scope === "shared") return;
     if (document.scope === "agent" && actor?.agentId === document.ownerAgentId) return;
     if (document.scope === "agent" && actor?.agentId && await this.repositories.documents.hasActiveShare(document.id, actor.agentId)) return;
@@ -194,6 +249,7 @@ export class DocumentService {
     documentOrScope: DocumentRecord | { readonly scope: "shared" | "agent" | "thread"; readonly ownerAgentId?: string },
     actor?: MemoryActor,
   ): Promise<void> {
+    if (!actor?.system && !actor?.agentId && !actor?.userId) unauthorized();
     if (actor?.system || documentOrScope.scope === "shared") return;
     if (documentOrScope.scope === "agent" && actor?.agentId === documentOrScope.ownerAgentId) return;
     if (documentOrScope.scope === "thread" && (actor?.agentId || actor?.userId)) return;
