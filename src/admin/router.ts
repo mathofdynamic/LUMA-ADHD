@@ -197,7 +197,22 @@ async function login(request: Request, environment: AdminApiEnvironment): Promis
   const auth = new AdminAuthService(environment.DB, environment);
   const result = await auth.login(request, stringField(body, "accessKey"));
   const services = adminServices(environment.DB);
-  await services.audit(result.session.id, "admin.login", "admin_session", result.session.id, { result: "success" });
+  const auditKey = `admin-login:${result.session.id}`;
+  let audited = false;
+  let auditError: unknown = undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await services.audit(result.session.id, "admin.login", "admin_session", result.session.id, { result: "success" }, auditKey);
+      audited = true;
+      break;
+    } catch (error: unknown) {
+      auditError = error;
+    }
+  }
+  if (!audited) {
+    await auth.revoke(result.session.id).catch(() => undefined);
+    throw auditError ?? new Error("admin login audit could not be persisted");
+  }
   return response({ authenticated: true, csrfToken: result.csrfToken, expiresAt: result.session.expiresAt }, 200, { "set-cookie": result.setCookie });
 }
 

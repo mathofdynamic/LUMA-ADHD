@@ -21,6 +21,12 @@ export interface CandidateSelectionInput {
   readonly now?: string;
   readonly explorationRate?: number;
   readonly rng?: () => number;
+  readonly mode?: "interactive" | "ambient" | "deep_work";
+  readonly isBroadQuestion?: boolean;
+  readonly coveredDomains?: readonly string[];
+  readonly contributionRole?: "CONTRIBUTE" | "SYNTHESIZE";
+  readonly ambientOpportunityIntervalMinutes?: number;
+  readonly eligibleAgentIds?: readonly string[];
 }
 
 export interface AgentSelectionActivity {
@@ -40,6 +46,12 @@ export interface SelectionSignals {
   readonly reputationSignal: number;
   readonly relevanceScore: number;
   readonly phaseFit: boolean;
+  readonly lexicalRelevance: number;
+  readonly coverageBonus: number;
+  readonly coveragePenalty: number;
+  readonly ambientCooldownPenalty: number;
+  readonly perspectiveDomain: string | null;
+  readonly relevant: boolean;
 }
 
 export interface ScoredCandidate {
@@ -131,18 +143,33 @@ function isRelevantCandidate(
   requested: boolean,
   lexicalScore: number,
   phaseFit: boolean,
+  mode: CandidateSelectionInput["mode"],
+  broadQuestion: boolean,
 ): boolean {
-  return addressed || requested || lexicalScore > 0 || phaseFit;
+  if (addressed || requested || lexicalScore > 0) return true;
+  // Ambient work may use a thread's lifecycle phase as a bounded opportunity
+  // signal. Interactive human routing must instead answer the actual query;
+  // phase alone is not enough unless the question is explicitly broad.
+  return mode !== "interactive" ? phaseFit : broadQuestion;
+}
+
+function perspectiveDomain(profile: AgentCandidateProfile): string | null {
+  const primary = profile.specialties.find((item) => item.isPrimary) ?? profile.specialties[0];
+  return primary ? normalizeReputationDomain(primary.domain) : null;
 }
 
 export function scoreCandidates(input: CandidateSelectionInput): readonly ScoredCandidate[] {
   const phaseDomains = PHASE_DOMAINS[input.thread.state] ?? [];
   const recent = input.recentAgentIds ?? [];
   const requested = new Set(input.requestedAgentIds ?? []);
+  const covered = new Set<string>((input.coveredDomains ?? []).map((domain) => normalizeReputationDomain(domain)));
+  const mode = input.mode ?? "ambient";
+  const broadQuestion = input.isBroadQuestion === true;
+  const eligibleAgentIds = input.eligibleAgentIds ? new Set(input.eligibleAgentIds) : null;
   const now = input.now ?? new Date().toISOString();
 
   return input.profiles
-    .filter((profile) => profile.agent.isActive && !profile.agent.isSupervisor)
+    .filter((profile) => profile.agent.isActive && !profile.agent.isSupervisor && (!eligibleAgentIds || eligibleAgentIds.has(profile.agent.id)))
     .map((profile) => {
       const reasons: string[] = [];
       let score = 10;
@@ -160,13 +187,20 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
       const relevance = lexicalRelevance(profile, input.messageText);
       if (relevance > 0) {
         score += relevance;
+        // Relevance is intentionally a little more durable than recency.
+        // A recently selected specialist may still be the correct Agent for
+        // a narrowly scoped question; diversity must not turn into routing
+        // away from the subject.
+        const relevanceStabilityBonus = relevance * (mode === "interactive" ? 0.25 : 0.5);
+        score += relevanceStabilityBonus;
         reasons.push("lexical specialty or interest relevance");
+        if (relevanceStabilityBonus > 0) reasons.push("relevance stability bonus");
       }
       const phaseFit = profile.specialties.some((item) => phaseDomains.includes(normalizeReputationDomain(item.domain)));
       if (phaseFit) {
         // Phase fit is useful relevance evidence, but must not become a
         // deterministic winner for broad states such as open/exploring.
-        score += 10;
+        score += mode === "interactive" ? 10 : 6;
         reasons.push("thread phase fit");
       }
       const recentCount = recent.filter((recentId) => recentId === agentId).length;
@@ -182,13 +216,34 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
       if (reputationSignal !== 0) reasons.push("bounded reputation signal");
 
       const activity = activityFor(input, agentId);
-      const threadRecencyPenalty = Math.min(9, activity.recentThreadOpportunityCount * 3);
-      const organizationRecencyPenalty = Math.min(4.5, activity.recentOpportunityCount * 0.75);
+      // Recency is a diversity signal, not a veto. Once the query has a
+      // concrete lexical specialist match, halve the cooldown pressure so a
+      // recently useful specialist is not replaced by an irrelevant phase
+      // match merely because it spoke recently.
+      const relevanceRecencyScale = relevance > 0 ? 0.5 : 1;
+      const threadRecencyPenalty = Math.min(9, activity.recentThreadOpportunityCount * 3 * relevanceRecencyScale);
+      const organizationRecencyPenalty = Math.min(4.5, activity.recentOpportunityCount * 0.75 * relevanceRecencyScale);
       score -= threadRecencyPenalty + organizationRecencyPenalty;
       if (threadRecencyPenalty > 0) reasons.push("cross-job thread recency penalty");
       if (organizationRecencyPenalty > 0) reasons.push("organization recency penalty");
+      if (relevance > 0 && (threadRecencyPenalty > 0 || organizationRecencyPenalty > 0)) reasons.push("relevance protects specialist routing");
 
-      const relevant = isRelevantCandidate(addressed, requestedByAgent, relevance, phaseFit);
+      const relevant = isRelevantCandidate(addressed, requestedByAgent, relevance, phaseFit, mode, broadQuestion);
+      const domain = perspectiveDomain(profile);
+      const hasCoveredDomain = domain !== null && covered.has(domain);
+      const coverageBonus = mode === "interactive" && relevant && covered.size > 0 && !hasCoveredDomain ? 3 : 0;
+      const coveragePenalty = mode === "interactive" && relevant && hasCoveredDomain && !requestedByAgent && !addressed ? 3 : 0;
+      score += coverageBonus - coveragePenalty;
+      if (coverageBonus > 0) reasons.push("uncovered relevant perspective");
+      if (coveragePenalty > 0) reasons.push("already-covered perspective penalty");
+
+      const intervalMinutes = Math.max(1, input.ambientOpportunityIntervalMinutes ?? 240);
+      const ambientAgeHours = hoursSince(now, activity.lastAmbientOpportunityAt);
+      const ambientCooldownPenalty = mode === "ambient" && ambientAgeHours < intervalMinutes / 60
+        ? Math.min(18, ((intervalMinutes / 60) - ambientAgeHours) / (intervalMinutes / 60) * 18)
+        : 0;
+      score -= ambientCooldownPenalty;
+      if (ambientCooldownPenalty > 0) reasons.push("ambient opportunity cooldown");
       const opportunityAgeHours = hoursSince(now, activity.lastTurnAt);
       const neglectedOpportunityBoost = relevant
         ? activity.recentOpportunityCount === 0 && opportunityAgeHours >= 36
@@ -211,7 +266,12 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
       score += explorationValue;
       reasons.push("candidate-specific exploration");
 
-      const relevanceScore = relevance + (phaseFit ? 10 : 0) + (requestedByAgent ? 24 : 0);
+      const phaseEligible = mode !== "interactive" || broadQuestion;
+      const relevanceScore = relevance
+        + (phaseFit && phaseEligible ? mode === "interactive" ? 10 : 6 : 0)
+        + (requestedByAgent ? 24 : 0)
+        + (addressed ? 60 : 0)
+        + (broadQuestion ? 2 : 0);
       return {
         agentId,
         score,
@@ -224,6 +284,12 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
           reputationSignal,
           relevanceScore,
           phaseFit,
+          lexicalRelevance: relevance,
+          coverageBonus,
+          coveragePenalty,
+          ambientCooldownPenalty,
+          perspectiveDomain: domain,
+          relevant,
         },
         reasons,
       };
@@ -233,7 +299,7 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
 
 export function chooseCandidateFromScores(
   scored: readonly ScoredCandidate[],
-  input: Pick<CandidateSelectionInput, "addressedAgentId" | "turnIndex" | "rng" | "explorationRate"> & {
+  input: Pick<CandidateSelectionInput, "addressedAgentId" | "turnIndex" | "rng" | "explorationRate" | "mode"> & {
     readonly lastAgentId?: string;
   },
 ): SelectionDecision {
@@ -248,7 +314,20 @@ export function chooseCandidateFromScores(
     return { candidate: addressed, usedExploration: false, explorationPool: [addressed.agentId], reason: "explicit_address" };
   }
 
-  const eligible = scored.filter((candidate) => candidate.relevanceScore > 0);
+  const lexicalEligible = scored.filter((candidate) => candidate.signals.lexicalRelevance > 0);
+  const eligible = input.mode === "ambient" && lexicalEligible.length > 0
+    ? lexicalEligible
+    : scored.filter((candidate) => candidate.relevanceScore > 0);
+  if (input.mode === "interactive" && eligible.length === 0) {
+    // A malformed/very short human message can carry no routable topic at
+    // all. Keep a single bounded phase fallback for that degraded case so a
+    // provider/runtime failure is still observable; phase fit is not marked
+    // as query relevance and cannot compete with a real specialist match.
+    const fallback = scored.filter((candidate) => candidate.signals.phaseFit).slice(0, 1)[0] ?? null;
+    return fallback
+      ? { candidate: fallback, usedExploration: false, explorationPool: [fallback.agentId], reason: "unresolved_focus_phase_fallback" }
+      : { candidate: null, usedExploration: false, explorationPool: [], reason: "no_relevant_interactive_candidate" };
+  }
   const pool = (eligible.length > 0 ? eligible : scored).slice(0, 3);
   const withoutLast = pool.filter((candidate) => candidate.agentId !== input.lastAgentId);
   const usablePool = withoutLast.length > 0 ? withoutLast : pool;

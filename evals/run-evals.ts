@@ -1,5 +1,5 @@
 import { FOUNDATION_GUARDRAILS } from "../src/guardrails";
-import { isObviousRepeatedContent } from "../src/agents/repetition";
+import { assessContributionDuplication, assessCurrentStateGrounding, buildConversationFocus, isObviousRepeatedContent, qualifyUnsupportedCurrentClaim } from "../src/agents";
 import { chooseCandidateFromScores, scoreCandidates } from "../src/agents/selection";
 
 interface EvalResult {
@@ -29,8 +29,8 @@ function agent(id: string, specialty: string, rank = 10) {
   };
 }
 
-function profile(value: ReturnType<typeof agent>) {
-  return { agent: value, specialties: [{ domain: value.specialty, description: value.specialty, priority: 1, isPrimary: true }], interests: [] };
+function profile(value: ReturnType<typeof agent>, description = value.specialty) {
+  return { agent: value, specialties: [{ domain: value.specialty, description, priority: 1, isPrimary: true }], interests: [] };
 }
 
 function selectionActivity(recentOpportunityCount = 0, recentThreadOpportunityCount = 0) {
@@ -291,8 +291,8 @@ const results: EvalResult[] = [];
 
 {
   const profiles = [
-    profile(agent("agent-customer", "customer_experience")),
-    profile(agent("agent-creative", "ux_creative")),
+    profile(agent("agent-customer", "customer_experience"), "customer onboarding and support"),
+    profile(agent("agent-creative", "ux_creative"), "UX onboarding flows"),
     profile(agent("agent-finance", "finance_pricing")),
   ];
   const scored = scoreCandidates({
@@ -379,9 +379,107 @@ const results: EvalResult[] = [];
   }, ["PASS: public message count is not the fairness metric"]));
 }
 
+{
+  const profiles = [
+    profile(agent("agent-product", "product_strategy")),
+    profile(agent("agent-customer", "customer_experience")),
+    profile(agent("agent-finance", "finance_pricing")),
+    profile(agent("agent-technical", "engineering_architecture")),
+  ];
+  const scored = scoreCandidates({
+    profiles,
+    messageText: "وضعیت فعلی لوما و مهم ترین مسائل",
+    thread: { state: "open", priority: 60 } as never,
+    mode: "interactive",
+    isBroadQuestion: true,
+    coveredDomains: ["product_strategy"],
+    turnIndex: 1,
+    rng: () => 0,
+  });
+  results.push(evaluate("postv1-broad-question-perspective-coverage", [
+    assertion(scored.length === 4, "broad question keeps multiple specialist perspectives eligible"),
+    assertion((scored.find((item) => item.agentId === "agent-finance")?.signals.coverageBonus ?? 0) > 0, "uncovered finance perspective receives a bounded coverage signal"),
+    assertion((scored.find((item) => item.agentId === "agent-product")?.signals.coveragePenalty ?? 0) > 0, "already-covered product perspective is down-weighted"),
+  ], {
+    turnCount: 3, selectedAgents: scored.slice(0, 3).map((item) => item.agentId), publicMessageCount: 3, jobsCreated: 1, terminalReason: "bounded_distinct_coverage",
+  }, ["PASS: coverage is a soft signal, not a roster quota"]));
+}
+
+{
+  const original = {
+    id: "human-original", threadId: "thread", authorType: "human", authorUserId: "human", authorAgentId: null,
+    contentText: "الان مهم ترین مشکل تجربه کاربری لوما چیست؟", createdAt: "2026-08-17T05:00:00.000Z", replyToMessageId: null,
+  } as never;
+  const nudge = {
+    id: "human-nudge", threadId: "thread", authorType: "human", authorUserId: "human", authorAgentId: null,
+    contentText: "کسی نیست جواب منو بده؟", createdAt: "2026-08-17T05:01:00.000Z", replyToMessageId: "human-original",
+  } as never;
+  const focus = buildConversationFocus({
+    thread: { title: "Discussion", summary: null } as never,
+    wakeMessage: nudge,
+    anchorMessage: original,
+    recentMessages: [original, nudge],
+  });
+  results.push(evaluate("postv1-follow-up-nudge-retains-focus", [
+    assertion(focus.interactionIntent === "nudge", "nudge intent is deterministic"),
+    assertion(focus.primaryQuery.includes("تجربه کاربری"), "substantive preceding human request remains primary"),
+    assertion(focus.retrievalQuery.includes("تجربه کاربری"), "retrieval does not collapse to generic nudge text"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-creative", "agent-customer"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "focus_preserved",
+  }, ["PASS: no extra classifier/provider call is required"]));
+}
+
+{
+  const first = "مشکل اصلی onboarding این است که مسیر رسیدن کاربر به اولین ارزش روشن نیست و فعال سازی را پایین می آورد.";
+  const second = "مسیر رسیدن کاربر به ارزش اولیه در onboarding واضح نیست و نرخ فعال سازی افت می کند.";
+  const duplication = assessContributionDuplication(second, [first]);
+  results.push(evaluate("postv1-semantic-duplicate-suppression", [
+    assertion(duplication.duplicate, "different wording with the same concepts is recognized as redundant"),
+    assertion(duplication.sharedTerms.length >= 4, "duplicate decision keeps a bounded concept trace"),
+  ], {
+    turnCount: 2, selectedAgents: ["agent-product", "agent-customer"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "duplicate_suppressed_to_wait",
+  }, ["PASS: no embeddings or vector infrastructure are used"]));
+}
+
+{
+  const pack = {
+    query: "current status",
+    items: [{ type: "document", sourceId: "proposal", title: "Future plan", pathOrUrl: "/shared/research/plan.md", excerpt: "این پیشنهاد آینده نیازمند اعتبارسنجی است و وضعیت فعلی را اثبات نمی کند.", authority: 60, score: 1, updatedAt: "2026-08-15T00:00:00.000Z", provenance: {} }],
+    totalCharacters: 100, truncated: false,
+    telemetry: { queryIntent: "discussion", retrievalCount: 1, sourceTypeCounts: { document: 1 }, officialKnowledgeCount: 0, agentDocumentCount: 0, sharedDocumentCount: 1, totalRetrievedCharacters: 100, contextTruncated: false, acquisitionOperations: 0 },
+  } as never;
+  const content = "یکی از سه مشکل اصلی فعلی لوما ابهام مدل تجاری است.";
+  const assessment = assessCurrentStateGrounding(content, pack);
+  results.push(evaluate("postv1-unsupported-current-diagnosis", [
+    assertion(!assessment.supported, "proposal-only context cannot establish a current top-three ranking"),
+    assertion(qualifyUnsupportedCurrentClaim(content, assessment).includes("فرضیه"), "unsupported ranking is qualified before publication"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-product"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "current_claim_qualified",
+  }, ["PASS: no fabricated operational metrics are introduced"]));
+}
+
+{
+  const profiles = [profile(agent("agent-technical", "engineering_architecture"), "backend architecture latency and reliability"), profile(agent("agent-finance", "finance_pricing"), "pricing and unit economics")];
+  const scored = scoreCandidates({
+    profiles,
+    messageText: "مشکل latency معماری backend چیست؟",
+    thread: { state: "open", priority: 50 } as never,
+    mode: "interactive",
+    turnIndex: 0,
+    rng: () => 0,
+  });
+  const selected = chooseCandidateFromScores(scored, { mode: "interactive", turnIndex: 0, rng: () => 1 }).candidate;
+  results.push(evaluate("postv1-specialist-routing-survives-coverage", [
+    assertion(selected?.agentId === "agent-technical", "technical specialist wins a technical question"),
+    assertion(scored.find((item) => item.agentId === "agent-finance")?.relevanceScore === 0, "irrelevant finance Agent is not eligible merely because it is quiet"),
+  ], {
+    turnCount: 1, selectedAgents: [selected?.agentId ?? "none"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "specialist_relevance",
+  }, ["PASS: coverage cannot replace subject relevance"]));
+}
+
 const failed = results.filter((result) => !result.passed);
 console.log(JSON.stringify({
-  suite: "luma-adhd-v1-postv1-agent-diversity",
+  suite: "luma-adhd-v1-postv1-interactive-quality",
   deterministic: true,
   externalServices: false,
   scenarioCount: results.length,

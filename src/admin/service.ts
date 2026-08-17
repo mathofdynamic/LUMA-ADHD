@@ -64,6 +64,26 @@ function jsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+function stringArrayValue(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").slice(0, 24)
+    : [];
+}
+
+function nullableNumber(value: unknown): number | null {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function nullableBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function nullableJsonObject(value: unknown): JsonObject | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return value as JsonObject;
+}
+
 function jsonRows(rows: readonly Row[]): readonly JsonObject[] {
   return rows.map((row) => jsonObject(row));
 }
@@ -167,20 +187,22 @@ export class AdminObservatoryService {
     entityType: string,
     entityId: string,
     payload: JsonObject = {},
+    idempotencyKey?: string,
   ): Promise<void> {
     const timestamp = nowIso();
     await this.database.prepare(
       `INSERT INTO audit_log (
         id, action, entity_type, entity_id, actor_type, payload_json,
         idempotency_key, admin_session_id, created_at
-      ) VALUES (?, ?, ?, ?, 'system', ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, 'system', ?, ?, ?, ?)
+      ON CONFLICT(idempotency_key) DO NOTHING`,
     ).bind(
       createId("admin-audit"),
       action,
       entityType,
       entityId,
       encodeObject(payload, "admin audit payload"),
-      `admin:${sessionId}:${action}:${entityType}:${entityId}:${timestamp}`,
+      idempotencyKey ?? `admin:${sessionId}:${action}:${entityType}:${entityId}:${timestamp}`,
       sessionId,
       timestamp,
     ).run();
@@ -364,11 +386,22 @@ export class AdminObservatoryService {
       interests: jsonValue(interests),
       turns: jsonRows(turns.results.map((row) => {
         const metadata = objectValue(row.metadata_json);
+        const selection = typeof metadata.selection === "object" && metadata.selection !== null && !Array.isArray(metadata.selection)
+          ? metadata.selection as JsonObject
+          : {};
         return {
           ...row,
-          selection: typeof metadata.selection === "object" && metadata.selection !== null && !Array.isArray(metadata.selection)
-            ? metadata.selection
-            : {},
+          selection,
+          selectionDiagnostics: {
+            selectedAgentId: nullableString(selection.selectedAgentId),
+            perspectiveDomain: nullableString(selection.perspectiveDomain),
+            reasons: stringArrayValue(selection.reasons),
+            conversationFocus: nullableJsonObject(selection.conversationFocus),
+            coveredDomains: stringArrayValue(selection.coveredDomains),
+            coverageBonus: nullableNumber(selection.coverageBonus),
+            coveragePenalty: nullableNumber(selection.coveragePenalty),
+            explorationUsed: nullableBoolean(selection.explorationUsed),
+          },
         };
       })),
       messages: jsonRows(messages.results),

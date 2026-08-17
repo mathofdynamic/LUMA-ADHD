@@ -435,6 +435,29 @@ describe("Phase 03 bounded orchestration", () => {
     expect(deferred?.count).toBeGreaterThanOrEqual(2);
   });
 
+  it("consumes a requested-agent routing hint after the target receives a turn", async () => {
+    const provider = new FakeProvider()
+      .enqueueJson(action("REQUEST_AGENT", { targetAgentId: "agent-technical", content: "Ask Technical for the architecture constraint." }))
+      .enqueueJson(action("WAIT"));
+    const context = await fixture("Architecture constraints", { addressedAgentId: "agent-product" });
+    const result = await runtime(provider).runInteractiveBurst({
+      job: context.job,
+      messageId: context.messageId,
+      threadId: context.threadId,
+      addressedAgentId: "agent-product",
+      wakeReason: "human_message",
+    });
+
+    expect(result.turns).toBeGreaterThanOrEqual(2);
+    const turns = await repositories.agentTurns.listByJob(context.job.id);
+    expect(turns[1]?.agentId).toBe("agent-technical");
+    const request = await env.DB
+      .prepare("SELECT status FROM agent_requests WHERE job_id = ? AND requested_agent_id = 'agent-technical' LIMIT 1")
+      .bind(context.job.id)
+      .first<{ status: string }>();
+    expect(request?.status).toBe("accepted");
+  });
+
   it("fails an unknown requested agent without creating an invalid request", async () => {
     const provider = new FakeProvider().enqueueJson(
       action("REQUEST_AGENT", { targetAgentId: "agent-does-not-exist", content: "Invalid target." }),
