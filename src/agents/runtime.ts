@@ -40,6 +40,8 @@ import { assessOfficialGrounding, type OfficialGroundingAssessment } from "./gro
 import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 import { HumanTaskService } from "../human-tasks";
 import { DiagramService } from "../diagrams";
+import { isObviousRepeatedContent } from "./repetition";
+import { countDailyAutonomyJobs, nextUtcDay } from "../autonomy-budgets";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
@@ -86,6 +88,7 @@ interface TurnExecutionResult {
   readonly wait: boolean;
   readonly retryableFailure: boolean;
   readonly stopBurst: boolean;
+  readonly repetitionSuppressed: boolean;
 }
 
 function stringField(payload: JsonObject, key: string): string | null {
@@ -263,6 +266,47 @@ export class AgentRuntimeService {
 
   async runDeepWork(job: JobRecord, threadId: string, trigger: string): Promise<RuntimeBurstResult> {
     const settings = await this.runtimeSettings;
+    const dailyDeepWorkJobs = await countDailyAutonomyJobs(this.dependencies.repositories.database, "deep_work", this.now());
+    if (dailyDeepWorkJobs > settings.deepWorkDailyJobBudget) {
+      const nextDueAt = nextUtcDay(this.now());
+      const deferredJob = await this.dependencies.repositories.jobs.create({
+        jobType: job.jobType,
+        payload: {
+          ...job.payload,
+          source: "daily_safety_budget_deferred",
+          deferredFromJobId: job.id,
+        },
+        idempotencyKey: `deep-work-budget:${job.id}:${nextDueAt}`,
+        dueAt: nextDueAt,
+        priority: job.priority,
+        maxAttempts: job.maxAttempts,
+        chainDepth: job.chainDepth,
+      });
+      await this.dependencies.repositories.events.append({
+        eventType: "runtime.autonomy_budget_deferred",
+        aggregateType: "job",
+        aggregateId: job.id,
+        threadId,
+        jobId: job.id,
+        idempotencyKey: `runtime-budget:${job.id}`,
+        payload: {
+          budget: "deep_work",
+          used: dailyDeepWorkJobs,
+          limit: settings.deepWorkDailyJobBudget,
+          deferredJobId: deferredJob.id,
+          dueAt: deferredJob.dueAt,
+        },
+      });
+      return {
+        jobId: job.id,
+        threadId,
+        turns: 0,
+        completedTurns: 0,
+        publicMessages: 0,
+        waits: 0,
+        stoppedReason: "daily_safety_budget_exhausted",
+      };
+    }
     return this.runBoundedBurst({
       job,
       messageId: stringField(job.payload, "messageId") ?? "",
@@ -320,7 +364,13 @@ export class AgentRuntimeService {
       : null;
     const profiles = await this.loadProfiles();
     const requestedAgentIds = await this.loadRequestedAgentIds(input.threadId);
-    const existingTurns = await this.dependencies.repositories.agentTurns.listByJob(input.job.id, input.maxTurns);
+    const hardTurnLimit = input.mode === "interactive"
+      ? FOUNDATION_GUARDRAILS.interactiveBurstMaxTurns
+      : input.mode === "deep_work"
+        ? FOUNDATION_GUARDRAILS.deepWorkMaxTurns
+        : 1;
+    const maxTurns = Math.min(Math.max(0, input.maxTurns), hardTurnLimit);
+    const existingTurns = await this.dependencies.repositories.agentTurns.listByJob(input.job.id, Math.max(1, maxTurns));
     let recentMessages = (await this.dependencies.repositories.messages.listRecentByThread(
       input.threadId,
       input.settings.recentMessageContextCount,
@@ -342,7 +392,7 @@ export class AgentRuntimeService {
       .filter((agentId): agentId is string => typeof agentId === "string");
     const requested = [...requestedAgentIds];
 
-    while (turnCount < input.maxTurns) {
+    while (turnCount < maxTurns) {
       if (input.mode === "interactive" && publicMessages >= 4) {
         stoppedReason = "public_message_budget_exhausted";
         break;
@@ -436,7 +486,9 @@ export class AgentRuntimeService {
         throw new RuntimeProviderFailure("bounded provider failure");
       }
       if (result.stopBurst) {
-        stoppedReason = "turn_stopped_after_safe_failure";
+        stoppedReason = result.repetitionSuppressed
+          ? "repeated_content_suppressed"
+          : "turn_stopped_after_safe_failure";
         break;
       }
       if (result.action?.intent === "REQUEST_HUMAN") {
@@ -698,7 +750,11 @@ export class AgentRuntimeService {
       );
       ({ step, response } = await parseWithRepair(response));
       while (step.kind === "acquisition") {
-        if (acquisitionOperations >= context.settings.ragMaxAcquisitionSteps) {
+        const acquisitionLimit = Math.min(
+          context.settings.ragMaxAcquisitionSteps,
+          FOUNDATION_GUARDRAILS.acquisitionMaxOperations,
+        );
+        if (acquisitionOperations >= acquisitionLimit) {
           acquisitionContext = [...acquisitionContext, "The bounded acquisition limit has been reached. Return a final action using only the information already available."];
           prompt = buildPrompt();
           response = await callProvider(
@@ -772,7 +828,7 @@ export class AgentRuntimeService {
           grounding: groundingMetadata(grounding),
           acquisitionOperations,
         });
-        return { action: null, outputMessageId: undefined, wait: false, retryableFailure: error.failure.retryable, stopBurst: true };
+        return { action: null, outputMessageId: undefined, wait: false, retryableFailure: error.failure.retryable, stopBurst: true, repetitionSuppressed: false };
       }
       const summary = error instanceof AgentActionValidationError || error instanceof AgentAcquisitionValidationError
         ? error.problems
@@ -795,17 +851,19 @@ export class AgentRuntimeService {
         idempotencyKey: `runtime-action-validation-failed:${turn.id}`,
         payload: { repairAttempts, validationErrors: summary.slice(0, 5), acquisitionOperations },
       });
-      return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true };
+      return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true, repetitionSuppressed: false };
     }
 
     const action = step.action;
 
     let outputMessageId: string | undefined;
     let deliveryStatus: string | undefined;
+    let repetitionSuppressed = false;
     try {
       const execution = await this.executeAction(context, action);
       outputMessageId = execution.outputMessageId;
       deliveryStatus = execution.deliveryStatus;
+      repetitionSuppressed = execution.repetitionSuppressed ?? false;
     } catch (error: unknown) {
       await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
         ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding),
@@ -821,7 +879,7 @@ export class AgentRuntimeService {
         idempotencyKey: `runtime-action-execution-failed:${turn.id}`,
         payload: { intent: action.intent, error: safeErrorSummary(error) },
       });
-      return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true };
+      return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true, repetitionSuppressed: false };
     }
 
     await this.dependencies.repositories.agentTurns.updateStatus(
@@ -836,6 +894,7 @@ export class AgentRuntimeService {
         latencyMs: response.latencyMs,
         finishReason: response.finishReason ?? null,
         deliveryStatus: deliveryStatus ?? null,
+        repetitionSuppressed,
       },
     );
     await this.dependencies.repositories.events.append({
@@ -854,7 +913,8 @@ export class AgentRuntimeService {
       outputMessageId,
       wait: action.intent === "WAIT",
       retryableFailure: false,
-      stopBurst: false,
+      stopBurst: repetitionSuppressed,
+      repetitionSuppressed,
     };
   }
 
@@ -912,7 +972,7 @@ export class AgentRuntimeService {
   private async executeAction(
     context: TurnContext,
     action: AgentAction,
-  ): Promise<{ readonly outputMessageId?: string; readonly deliveryStatus?: string }> {
+  ): Promise<{ readonly outputMessageId?: string; readonly deliveryStatus?: string; readonly repetitionSuppressed?: boolean }> {
     const actionKey = `agent-action:${context.turn.id}`;
     switch (action.intent) {
       case "WAIT":
@@ -931,6 +991,22 @@ export class AgentRuntimeService {
       case "SPEAK": {
         const content = action.content as string;
         const projectionKey = `agent-output:${context.job.id}:${context.turn.sequenceNumber}:${context.agent.id}`;
+        const previousAgentContent = context.recentMessages
+          .filter((message) => message.authorType === "agent")
+          .map((message) => message.contentText);
+        if (isObviousRepeatedContent(content, previousAgentContent)) {
+          await this.dependencies.repositories.events.append({
+            eventType: "runtime.repeated_content_suppressed",
+            aggregateType: "agent_turn",
+            aggregateId: context.turn.id,
+            threadId: context.thread.id,
+            jobId: context.job.id,
+            actor: { type: "agent", agentId: context.agent.id },
+            idempotencyKey: `${actionKey}:repetition`,
+            payload: { contentCharacters: Array.from(content).length },
+          });
+          return { repetitionSuppressed: true };
+        }
         await this.dependencies.repositories.threads.addParticipant(context.thread.id, {
           agentId: context.agent.id,
           role: "contributor",

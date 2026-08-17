@@ -3,6 +3,7 @@ import { nowIso } from "../database/ids";
 import type { AgentJobQueue } from "../agents/scheduler";
 import { OFFICIAL_LUMA_SOURCES } from "./sources";
 import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
+import { countDailyAutonomyJobs } from "../autonomy-budgets";
 
 type Repositories = ReturnType<typeof createRepositories>;
 
@@ -30,6 +31,17 @@ export class KnowledgeScheduler {
     const asOf = this.now();
     const settings = this.configuredSettings
       ?? await loadEffectiveRuntimeSettings(this.repositories.database).catch(() => DEFAULT_RUNTIME_SETTINGS);
+    const dailySyncJobs = await countDailyAutonomyJobs(this.repositories.database, "knowledge", asOf);
+    if (dailySyncJobs >= settings.knowledgeDailySyncBudget) {
+      await this.repositories.events.append({
+        eventType: "scheduler.autonomy_budget_exhausted",
+        aggregateType: "scheduler",
+        aggregateId: "knowledge-sync",
+        idempotencyKey: `scheduler-budget:knowledge-sync:${asOf.slice(0, 10)}`,
+        payload: { budget: "knowledge", used: dailySyncJobs, limit: settings.knowledgeDailySyncBudget },
+      });
+      return { sourcesInitialized: (await this.repositories.knowledgeSources.listAll(100)).length, jobsCreated: 0 };
+    }
     const due = await this.repositories.knowledgeSources.listDue(asOf, Math.min(1, settings.schedulerWorkPerTick));
     let jobsCreated = 0;
     const slot = Math.floor(Date.parse(asOf) / (15 * 60_000));

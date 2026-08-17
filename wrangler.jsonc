@@ -15,7 +15,7 @@
   // intentionally absent; use .dev.vars locally and Wrangler secrets later.
   "vars": {
     "LUMA_ENVIRONMENT": "production",
-    "LUMA_PHASE": "07-human-diagrams-observability",
+    "LUMA_PHASE": "08-hardening-deployment",
     "ADMIN_SESSION_TTL_SECONDS": "43200",
     "NEBULA_BASE_URL": "https://nebula-free-llm.nebula-ai-company.workers.dev/v1",
     "NEBULA_MODEL": "auto",

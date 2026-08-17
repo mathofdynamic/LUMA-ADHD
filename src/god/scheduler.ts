@@ -2,6 +2,7 @@ import type { createRepositories } from "../database/repositories";
 import { nowIso } from "../database/ids";
 import type { AgentJobMessage } from "../jobs";
 import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
+import { countDailyAutonomyJobs } from "../autonomy-budgets";
 
 type GodRepositories = ReturnType<typeof createRepositories>;
 
@@ -51,6 +52,24 @@ export class GodScheduler {
     }
     if (!this.dependencies.enabled || schedule.nextDueAt > asOf) {
       return { due: false, jobsCreated: 0, enabled: this.dependencies.enabled };
+    }
+
+    const dailyReviews = await countDailyAutonomyJobs(this.dependencies.repositories.database, "god", asOf);
+    if (dailyReviews >= settings.godDailyReviewBudget) {
+      await this.dependencies.repositories.reputation.markScheduleEnqueued(
+        SCHEDULE_KEY,
+        plusInterval(asOf, reviewIntervalMs),
+        undefined,
+        asOf,
+      );
+      await this.dependencies.repositories.events.append({
+        eventType: "scheduler.autonomy_budget_exhausted",
+        aggregateType: "scheduler",
+        aggregateId: SCHEDULE_KEY,
+        idempotencyKey: `scheduler-budget:${SCHEDULE_KEY}:${asOf.slice(0, 10)}`,
+        payload: { budget: "god", used: dailyReviews, limit: settings.godDailyReviewBudget },
+      });
+      return { due: true, jobsCreated: 0, enabled: true };
     }
 
     const slot = Math.floor(Date.parse(asOf) / reviewIntervalMs);

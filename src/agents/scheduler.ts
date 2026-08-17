@@ -3,6 +3,7 @@ import { nowIso } from "../database/ids";
 import type { AgentJobMessage } from "../jobs";
 import type { JobRecord } from "../database/types";
 import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
+import { countDailyAutonomyJobs } from "../autonomy-budgets";
 
 type SchedulerRepositories = ReturnType<typeof createRepositories>;
 
@@ -23,6 +24,7 @@ export interface SchedulerTickResult {
   readonly ambientJobsCreated: number;
   readonly dueJobsEnqueued: number;
   readonly inactivityRecovery: boolean;
+  readonly budgetExhausted: boolean;
 }
 
 const SCHEDULE_KEY = "agent-runtime-ambient-opportunities";
@@ -72,15 +74,19 @@ export class AgentScheduler {
         ambientJobsCreated: 0,
         dueJobsEnqueued: enqueued,
         inactivityRecovery: false,
+        budgetExhausted: false,
       };
     }
 
+    const dailyAmbientJobs = await countDailyAutonomyJobs(this.dependencies.repositories.database, "ambient", asOf);
+    const availableAmbientJobs = Math.max(0, settings.ambientDailyJobBudget - dailyAmbientJobs);
+    const budgetExhausted = availableAmbientJobs === 0;
     const threads = await this.dependencies.repositories.threads.listActive(50);
     const candidates = threads
       .map((thread) => ({ thread, inactiveHours: hoursSince(asOf, thread.lastActivityAt) }))
       .filter(({ inactiveHours }) => inactiveHours >= settings.ambientOpportunityIntervalMinutes / 60)
       .sort((left, right) => right.inactiveHours - left.inactiveHours || right.thread.priority - left.thread.priority)
-      .slice(0, settings.schedulerWorkPerTick);
+      .slice(0, Math.min(settings.schedulerWorkPerTick, availableAmbientJobs));
     const slot = Math.floor(Date.parse(asOf) / (settings.ambientOpportunityIntervalMinutes * 60_000));
     let ambientJobsCreated = 0;
     let inactivityRecovery = false;
@@ -112,11 +118,22 @@ export class AgentScheduler {
       asOf,
     );
 
+    if (budgetExhausted) {
+      await this.dependencies.repositories.events.append({
+        eventType: "scheduler.autonomy_budget_exhausted",
+        aggregateType: "scheduler",
+        aggregateId: SCHEDULE_KEY,
+        idempotencyKey: `scheduler-budget:${SCHEDULE_KEY}:${asOf.slice(0, 10)}`,
+        payload: { budget: "ambient", used: dailyAmbientJobs, limit: settings.ambientDailyJobBudget },
+      });
+    }
+
     return {
       dueSchedule: true,
       ambientJobsCreated,
       dueJobsEnqueued: enqueued,
       inactivityRecovery,
+      budgetExhausted,
     };
   }
 

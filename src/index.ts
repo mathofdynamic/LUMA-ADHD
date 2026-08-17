@@ -17,7 +17,7 @@ function logScheduleTick(controller: ScheduledController): void {
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "07-human-diagrams-observability",
+      phase: "08-hardening-deployment",
     }),
   );
 }
@@ -55,6 +55,7 @@ const handler = {
         ambientJobsCreated: result.ambientJobsCreated,
         dueJobsEnqueued: result.dueJobsEnqueued,
         inactivityRecovery: result.inactivityRecovery,
+        autonomyBudgetExhausted: result.budgetExhausted,
         knowledgeSyncJobsCreated: knowledge.jobsCreated,
         knowledgeSourcesConfigured: knowledge.sourcesInitialized,
         reputationJobsCreated: reputation.jobsCreated,
