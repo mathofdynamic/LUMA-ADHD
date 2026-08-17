@@ -1,8 +1,8 @@
 # LUMA ADHD
 
-LUMA ADHD is a persistent multi-agent workspace for thinking about LUMA as a company, product, platform, and business. The project is designed around a Cloudflare Free-compatible core: Workers, D1, Cron Triggers, one coarse Queue, and Worker Static Assets.
+LUMA ADHD is a persistent multi-agent workspace for thinking about LUMA as a company, product, platform, and business. v1 is built around a Cloudflare Free-compatible core: Workers, D1, Cron Triggers, one coarse Queue, and Worker Static Assets.
 
-Phase 00 establishes the runtime scaffold, configuration contract, module boundaries, local tests, and the observatory-style admin shell. It does not connect Telegram, call an LLM provider, run autonomous agents, or deploy production infrastructure.
+v1 is complete through Phase 08. It includes eight normal Agents, GOD as a distinct supervisory model, gateway-only Telegram ingress with persona outbound identities, D1-backed memory/files/RAG, domain reputation, Human Tasks, source-first diagrams, and a private Admin Observatory. Phase 08 hardens failure handling, idempotency, loop limits, deterministic evaluations, security review, CI, deployment, and operations.
 
 ## Local setup
 
@@ -15,7 +15,7 @@ npm test
 npm run dev
 ```
 
-`.dev.vars` is local-only and ignored by Git. Keep all values empty in Phase 00. See [docs/SETUP_AND_SECRETS.md](docs/SETUP_AND_SECRETS.md) for the configuration contract and later-phase setup.
+`.dev.vars` is local-only and ignored by Git. Keep credentials out of tracked files. See [docs/SETUP_AND_SECRETS.md](docs/SETUP_AND_SECRETS.md), [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), [docs/OPERATIONS.md](docs/OPERATIONS.md), and [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Architecture
 
@@ -39,7 +39,9 @@ npm run dev
 | `npm run dev` | Build admin assets and start local Wrangler development |
 | `npm run dev:admin` | Run the Vite admin development server |
 | `npm run migrations:local` | Apply local D1 migrations |
+| `npm run eval` | Run the deterministic, credential-free v1 behavioral eval suite |
+| `npm run verify` | Run local migrations, generated-type checks, tests, evals, builds, and startup validation |
 
 ## Phase workflow
 
-Implementation prompts in `IMPLEMENTATION_PROMPTS/` are executed in numerical order. Each phase is isolated, tested, and committed before the next phase begins. Do not add production credentials or infrastructure until the phase that requires them.
+Implementation prompts in `IMPLEMENTATION_PROMPTS/` were executed in numerical order. Each phase is isolated, tested, and committed. Core v1 does not require R2, KV, Durable Objects, Workflows, Redis, PostgreSQL, a vector database, or a VPS. Browser Rendering is optional; source-only diagrams remain fully operational.

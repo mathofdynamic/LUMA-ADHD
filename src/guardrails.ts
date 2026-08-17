@@ -4,6 +4,7 @@ export const FOUNDATION_GUARDRAILS = Object.freeze({
   interactiveBurstMaxTurns: 6,
   deepWorkMaxTurns: 12,
   queueChainMaxDepth: 3,
+  acquisitionMaxOperations: 3,
   schedulerWorkPerTick: 3,
   maxRetries: 3,
   providerMaxAttempts: 2,
@@ -16,6 +17,13 @@ export const FOUNDATION_GUARDRAILS = Object.freeze({
   ambientOpportunityIntervalMinutes: 240,
   inactivityRecoveryHours: 6,
   telegramMessageMaxCharacters: 4096,
+  // These are LUMA internal safety budgets, not Cloudflare quota claims.
+  ambientDailyJobBudget: 24,
+  deepWorkDailyJobBudget: 24,
+  godDailyReviewBudget: 2,
+  knowledgeDailySyncBudget: 12,
+  reputationDailyJobBudget: 2,
+  repeatedContentMinimumCharacters: 32,
 } as const);
 
 export type FoundationGuardrails = typeof FOUNDATION_GUARDRAILS;

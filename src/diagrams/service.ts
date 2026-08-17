@@ -7,6 +7,7 @@ import { renderDiagramHtml } from "./render-html";
 import { validateDiagramSpec } from "./schema";
 import { UnavailableDiagramRenderer } from "./renderer";
 import type { DiagramActor, DiagramCreateInput, DiagramRenderer, DiagramSpec } from "./types";
+import { FOUNDATION_GUARDRAILS } from "../guardrails";
 
 type Repositories = ReturnType<typeof createRepositories>;
 
@@ -93,6 +94,17 @@ export class DiagramService {
   async render(artifactId: string): Promise<import("../database/types").ArtifactRecord> {
     const artifact = await this.artifacts.getById(artifactId);
     if (!artifact.sourceText) throw new ValidationError("diagram has no trusted source");
+    if (artifact.renderAttemptCount >= FOUNDATION_GUARDRAILS.maxRetries) {
+      await this.repositories.events.append({
+        eventType: "diagram.render_retry_suppressed",
+        aggregateType: "artifact",
+        aggregateId: artifactId,
+        threadId: artifact.threadId ?? undefined,
+        idempotencyKey: `diagram-render-cap:${artifactId}:${artifact.renderAttemptCount}`,
+        payload: { attempts: artifact.renderAttemptCount, maximum: FOUNDATION_GUARDRAILS.maxRetries },
+      });
+      return artifact;
+    }
     const result = await this.renderer.render({ artifactId, title: artifact.title, html: artifact.sourceText });
     const status = result.status;
     const updated = await this.artifacts.updateRender({ id: artifactId, status, error: status === "rendered" ? undefined : result.reason, incrementAttempt: true });

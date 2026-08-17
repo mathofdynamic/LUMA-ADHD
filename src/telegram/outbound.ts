@@ -58,6 +58,9 @@ export class TelegramOutboundService {
   constructor(private readonly dependencies: TelegramOutboundDependencies) {
     this.now = dependencies.now ?? nowIso;
     this.maxAttempts = dependencies.maxAttempts ?? FOUNDATION_GUARDRAILS.maxRetries;
+    if (!Number.isInteger(this.maxAttempts) || this.maxAttempts < 1 || this.maxAttempts > FOUNDATION_GUARDRAILS.maxRetries) {
+      throw new TelegramConfigurationError(`Telegram maxAttempts must be between 1 and ${FOUNDATION_GUARDRAILS.maxRetries}`);
+    }
   }
 
   async projectAgentMessage(

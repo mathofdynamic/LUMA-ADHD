@@ -14,6 +14,20 @@ The project does not require R2, Durable Objects, Workflows, KV, Redis, PostgreS
 
 Cloudflare limits change. Verify the official documentation before production configuration or capacity decisions.
 
+## Verified platform snapshot
+
+Checked against the official references on 2026-08-17. These values are planning boundaries, not LUMA usage claims:
+
+| Service | Current Free-plan boundary used by v1 |
+| --- | --- |
+| Workers | 100,000 requests/day; 10 ms CPU per HTTP/Cron invocation; 128 MB memory |
+| D1 | 10 databases/account; 500 MB/database; 5 GB/account; 50 D1 queries/Worker invocation |
+| Queues | 24-hour retention; 128 KB message; 100 retries; 100-message batch; 15-minute consumer wall time |
+| Cron | One metronome trigger in this project; account trigger limits are documented by Cloudflare and must be rechecked before adding any trigger |
+| Browser Rendering | Optional only; current no-binding production path remains source-only. Cloudflare documents a no-charge daily browser allowance, but it is not required by v1 |
+
+The Admin Observatory reports application-observed activity and LUMA internal safety budgets. It does not claim exact account quota consumption or display fabricated percentages.
+
 ### Worker execution
 
 Worker requests, scheduled invocations, and Queue consumers share account-level request and CPU budgets. Foundation handlers therefore remain thin: route a small API response, record a bounded scheduling signal, or acknowledge a validated Queue message. They do not run model reasoning or unbounded loops.

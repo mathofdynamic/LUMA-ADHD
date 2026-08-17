@@ -74,6 +74,41 @@ export const ADMIN_SETTING_DEFINITIONS = {
     min: 2,
     max: 20,
   },
+  ambient_daily_job_budget: {
+    label: "Ambient daily safety budget",
+    description: "LUMA internal maximum ambient opportunities created per UTC day.",
+    defaultValue: FOUNDATION_GUARDRAILS.ambientDailyJobBudget,
+    min: 0,
+    max: FOUNDATION_GUARDRAILS.ambientDailyJobBudget,
+  },
+  deep_work_daily_job_budget: {
+    label: "Deep-work daily safety budget",
+    description: "LUMA internal maximum deep-work jobs created per UTC day.",
+    defaultValue: FOUNDATION_GUARDRAILS.deepWorkDailyJobBudget,
+    min: 0,
+    max: FOUNDATION_GUARDRAILS.deepWorkDailyJobBudget,
+  },
+  god_daily_review_budget: {
+    label: "GOD daily safety budget",
+    description: "LUMA internal maximum scheduled GOD review jobs created per UTC day.",
+    defaultValue: FOUNDATION_GUARDRAILS.godDailyReviewBudget,
+    min: 0,
+    max: FOUNDATION_GUARDRAILS.godDailyReviewBudget,
+  },
+  knowledge_daily_sync_budget: {
+    label: "Knowledge daily safety budget",
+    description: "LUMA internal maximum scheduled knowledge sync jobs created per UTC day.",
+    defaultValue: FOUNDATION_GUARDRAILS.knowledgeDailySyncBudget,
+    min: 0,
+    max: FOUNDATION_GUARDRAILS.knowledgeDailySyncBudget,
+  },
+  reputation_daily_job_budget: {
+    label: "Reputation daily safety budget",
+    description: "LUMA internal maximum scheduled reputation jobs created per UTC day.",
+    defaultValue: FOUNDATION_GUARDRAILS.reputationDailyJobBudget,
+    min: 0,
+    max: FOUNDATION_GUARDRAILS.reputationDailyJobBudget,
+  },
   reputation_calculation_cadence_hours: {
     label: "Reputation calculation cadence",
     description: "Minimum interval between scheduled reputation scoring runs.",
@@ -97,6 +132,11 @@ export interface EffectiveRuntimeSettings {
   readonly ragMaxAcquisitionSteps: number;
   readonly ragContextBudget: number;
   readonly recentMessageContextCount: number;
+  readonly ambientDailyJobBudget: number;
+  readonly deepWorkDailyJobBudget: number;
+  readonly godDailyReviewBudget: number;
+  readonly knowledgeDailySyncBudget: number;
+  readonly reputationDailyJobBudget: number;
 }
 
 export const DEFAULT_RUNTIME_SETTINGS: EffectiveRuntimeSettings = Object.freeze({
@@ -111,6 +151,11 @@ export const DEFAULT_RUNTIME_SETTINGS: EffectiveRuntimeSettings = Object.freeze(
   ragMaxAcquisitionSteps: 3,
   ragContextBudget: 6_000,
   recentMessageContextCount: FOUNDATION_GUARDRAILS.recentContextMessageLimit,
+  ambientDailyJobBudget: FOUNDATION_GUARDRAILS.ambientDailyJobBudget,
+  deepWorkDailyJobBudget: FOUNDATION_GUARDRAILS.deepWorkDailyJobBudget,
+  godDailyReviewBudget: FOUNDATION_GUARDRAILS.godDailyReviewBudget,
+  knowledgeDailySyncBudget: FOUNDATION_GUARDRAILS.knowledgeDailySyncBudget,
+  reputationDailyJobBudget: FOUNDATION_GUARDRAILS.reputationDailyJobBudget,
 });
 
 const RUNTIME_SETTING_KEYS = {
@@ -125,6 +170,11 @@ const RUNTIME_SETTING_KEYS = {
   ragMaxAcquisitionSteps: "rag_max_acquisition_steps",
   ragContextBudget: "rag_context_budget",
   recentMessageContextCount: "recent_message_context_count",
+  ambientDailyJobBudget: "ambient_daily_job_budget",
+  deepWorkDailyJobBudget: "deep_work_daily_job_budget",
+  godDailyReviewBudget: "god_daily_review_budget",
+  knowledgeDailySyncBudget: "knowledge_daily_sync_budget",
+  reputationDailyJobBudget: "reputation_daily_job_budget",
 } as const satisfies Record<keyof EffectiveRuntimeSettings, AdminSettingKey>;
 
 export async function loadEffectiveRuntimeSettings(database: DatabaseClient): Promise<EffectiveRuntimeSettings> {
@@ -147,6 +197,11 @@ export async function loadEffectiveRuntimeSettings(database: DatabaseClient): Pr
       ragMaxAcquisitionSteps: read("ragMaxAcquisitionSteps"),
       ragContextBudget: read("ragContextBudget"),
       recentMessageContextCount: read("recentMessageContextCount"),
+      ambientDailyJobBudget: read("ambientDailyJobBudget"),
+      deepWorkDailyJobBudget: read("deepWorkDailyJobBudget"),
+      godDailyReviewBudget: read("godDailyReviewBudget"),
+      knowledgeDailySyncBudget: read("knowledgeDailySyncBudget"),
+      reputationDailyJobBudget: read("reputationDailyJobBudget"),
     };
   } catch {
     // Phase 00-05 databases do not have the Phase 06 table yet. The hard-coded

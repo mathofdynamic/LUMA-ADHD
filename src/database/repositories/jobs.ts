@@ -3,6 +3,7 @@ import { createId, nowIso } from "../ids";
 import { NotFoundError, ValidationError } from "../errors";
 import { toJsonObject, toNullableString, toNumber } from "../rows";
 import { encodeObject, requireLimit, requireNonEmpty } from "../validation";
+import { FOUNDATION_GUARDRAILS } from "../../guardrails";
 import type {
   ClaimedJob,
   CreateJobInput,
@@ -81,9 +82,15 @@ export class JobRepository {
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
       throw new ValidationError("job.maxAttempts must be a positive integer");
     }
+    if (maxAttempts > FOUNDATION_GUARDRAILS.maxRetries) {
+      throw new ValidationError(`job.maxAttempts must not exceed ${FOUNDATION_GUARDRAILS.maxRetries}`);
+    }
 
     if (!Number.isInteger(chainDepth) || chainDepth < 0) {
       throw new ValidationError("job.chainDepth must be a non-negative integer");
+    }
+    if (chainDepth > FOUNDATION_GUARDRAILS.queueChainMaxDepth) {
+      throw new ValidationError(`job.chainDepth must not exceed ${FOUNDATION_GUARDRAILS.queueChainMaxDepth}`);
     }
 
     await this.database

@@ -1,6 +1,6 @@
 # LUMA ADHD setup and secrets
 
-Phase 05 extends the provider-neutral runtime with inspectable reputation and provider-neutral GOD supervision. The application and automated tests run locally with empty values, fake providers/transports, and local Wrangler bindings. Live activation is never performed by ordinary tests or deployments.
+Phase 08 is the final v1 hardening layer over the provider-neutral runtime, memory/RAG, Human Tasks, diagrams, reputation, GOD, and Admin Observatory. The application and automated tests run locally with empty values, fake providers/transports, and local Wrangler bindings. Live activation is never performed by ordinary tests or deployments.
 
 ## Configuration categories
 
@@ -49,10 +49,11 @@ The tracked `.dev.vars.example` contains names and empty values only. Copy it to
    npm run types
    npm run typecheck
    npm test
-   npm run build
+   npm run eval
+   npm run verify
    ```
 
-5. Start the local Worker with `npm run dev`. Wrangler uses local D1 and Queue simulation by default. No Telegram, Nebula, GOD, admin, or Cloudflare API credential is needed for local Phase 05 code or tests. A webhook request without the local secret is rejected safely.
+5. Start the local Worker with `npm run dev`. Wrangler uses local D1 and Queue simulation by default. No Telegram, Nebula, GOD, admin, or Cloudflare API credential is needed for local Phase 08 code or tests. A webhook request without the local secret is rejected safely.
 
 Manual development can authenticate Wrangler with the browser-based login flow:
 
@@ -85,7 +86,7 @@ npx wrangler secret put ADMIN_AUTH_SECRET
 
 Use the appropriate Worker environment when staging and production configuration are introduced. Do not use `.dev.vars` as a production deployment mechanism. `GOD_PROVIDER`, `GOD_BASE_URL`, `GOD_MODEL`, and `GOD_REASONING_EFFORT` are ordinary Worker configuration; `GOD_API_KEY` remains the only provider credential. GOD never requires a Telegram GOD bot or `TELEGRAM_GOD_BOT_TOKEN`.
 
-Automatic deployment may later use a restricted Cloudflare API token stored as a GitHub Actions secret. That token is separate from application runtime secrets and should have only the account permissions required to deploy this Worker. Phase 05 does not create or use it.
+Automatic deployment is not required by Phase 08. If a future manual workflow is added, use a restricted Cloudflare API token stored as a protected GitHub Actions secret. That token is separate from application runtime secrets and should have only the account permissions required to deploy this Worker.
 
 ## D1 identifier lifecycle
 
@@ -132,6 +133,6 @@ powershell -File .\scripts\agent-ambient-smoke.ps1 -GroupId '<telegram group id>
 | Phase 03 | Nebula API key, base URL, and model configuration | Yes, Nebula key |
 | Phase 05 | OpenAI provider protocol, `GOD_MODEL`, `GOD_BASE_URL`, `GOD_REASONING_EFFORT`, and `GOD_API_KEY`; no GOD Telegram bot | Yes, for the single live GOD review |
 | Phase 06+ | Production admin authentication secret | Yes, admin secret |
-| Phase 08 | Restricted Cloudflare API token if automatic deployment is enabled | Only if CI/CD is enabled |
+| Phase 08 | No new runtime secret; restricted Cloudflare API token only for an optional deployment workflow | No for local/CI verification; only if optional deployment automation is enabled |
 
-No credential is required for local Phase 05 development or automated tests. Live Telegram and Nebula validation requires the Phase 02 values above plus the Phase 03 Nebula secret. Live GOD validation additionally requires a verified provider, model, and provider secret; `TELEGRAM_GOD_BOT_TOKEN` is never required.
+No credential is required for local Phase 08 development, `npm run verify`, or automated tests. Live Telegram and Nebula validation requires the Phase 02 values above plus the Phase 03 Nebula secret. Live GOD validation additionally requires a verified provider, model, and provider secret; `TELEGRAM_GOD_BOT_TOKEN` is never required.
