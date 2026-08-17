@@ -4,6 +4,7 @@ import type { AgentJobMessage } from "../jobs";
 import type { JobRecord } from "../database/types";
 import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 import { countDailyAutonomyJobs } from "../autonomy-budgets";
+import { selectNextAgent, type AgentCandidateProfile } from "./selection";
 
 type SchedulerRepositories = ReturnType<typeof createRepositories>;
 
@@ -82,6 +83,7 @@ export class AgentScheduler {
     const availableAmbientJobs = Math.max(0, settings.ambientDailyJobBudget - dailyAmbientJobs);
     const budgetExhausted = availableAmbientJobs === 0;
     const threads = await this.dependencies.repositories.threads.listActive(50);
+    const profiles = await this.loadProfiles();
     const candidates = threads
       .map((thread) => ({ thread, inactiveHours: hoursSince(asOf, thread.lastActivityAt) }))
       .filter(({ inactiveHours }) => inactiveHours >= settings.ambientOpportunityIntervalMinutes / 60)
@@ -93,12 +95,38 @@ export class AgentScheduler {
     for (const candidate of candidates) {
       const recovery = candidate.inactiveHours >= settings.inactivityRecoveryHours;
       inactivityRecovery ||= recovery;
+      const activityRows = await this.dependencies.repositories.agentTurns.getSelectionActivity(
+        profiles.map((profile) => profile.agent.id),
+        candidate.thread.id,
+        asOf,
+        72,
+      );
+      const preferred = selectNextAgent({
+        profiles,
+        messageText: [candidate.thread.title, candidate.thread.summary ?? ""].join(" "),
+        thread: candidate.thread,
+        activityByAgentId: Object.fromEntries(Object.entries(activityRows).map(([agentId, row]) => [agentId, {
+          lastTurnAt: row.last_turn_at,
+          lastThreadTurnAt: row.last_thread_turn_at,
+          lastAmbientOpportunityAt: row.last_ambient_opportunity_at,
+          recentOpportunityCount: row.recent_opportunity_count,
+          recentMeaningfulContributionCount: row.recent_meaningful_count,
+          recentThreadOpportunityCount: row.recent_thread_opportunity_count,
+          recentThreadMeaningfulContributionCount: row.recent_thread_meaningful_count,
+        }])),
+        reputationByAgentId: Object.fromEntries(profiles.map((profile) => [profile.agent.id, (profile.agent.rank - 10) / 10])),
+        turnIndex: 0,
+        now: asOf,
+        explorationRate: 0,
+        rng: this.rng,
+      });
       const job = await this.dependencies.repositories.jobs.create({
         jobType: "agent.ambient",
         payload: {
           source: "scheduler",
           threadId: candidate.thread.id,
           wakeReason: recovery ? "inactivity_recovery" : "quiet_active_thread",
+          preferredAgentId: preferred?.agentId ?? null,
         },
         idempotencyKey: `agent-ambient:${slot}:${candidate.thread.id}`,
         dueAt: asOf,
@@ -152,11 +180,12 @@ export class AgentScheduler {
     threadId: string,
     wakeReason = "operator_ambient_smoke",
     asOf = this.now(),
+    preferredAgentId?: string | null,
   ): Promise<string> {
     const slot = `${Date.parse(asOf)}-${threadId}`;
     const job = await this.dependencies.repositories.jobs.create({
       jobType: "agent.ambient",
-      payload: { source: "operator", threadId, wakeReason },
+      payload: { source: "operator", threadId, wakeReason, preferredAgentId: preferredAgentId ?? null },
       idempotencyKey: `agent-ambient-operator:${slot}`,
       dueAt: asOf,
       priority: 80,
@@ -174,6 +203,16 @@ export class AgentScheduler {
       createdAt: asOf,
     });
     await this.dependencies.repositories.jobs.markEnqueued(job.id, asOf).catch(() => undefined);
+  }
+
+  private async loadProfiles(): Promise<readonly AgentCandidateProfile[]> {
+    const agents = (await this.dependencies.repositories.agents.listActive(20))
+      .filter((agent) => !agent.isSupervisor);
+    return Promise.all(agents.map(async (agent) => ({
+      agent,
+      specialties: await this.dependencies.repositories.agents.listSpecialties(agent.id),
+      interests: await this.dependencies.repositories.agents.listInterests(agent.id),
+    })));
   }
 }
 

@@ -22,8 +22,10 @@ import {
 import { AgentDocumentTools } from "./memory-tools";
 import { buildAgentPrompt, TELEGRAM_PRESENTATION_GUIDANCE } from "./prompts";
 import {
+  chooseCandidateFromScores,
   scoreCandidates,
   type AgentCandidateProfile,
+  type AgentSelectionActivity,
   type ScoredCandidate,
 } from "./selection";
 import {
@@ -204,7 +206,7 @@ export class AgentRuntimeService {
       if (!threadId) {
         return null;
       }
-      return this.runAmbientOpportunity(job, threadId);
+      return this.runAmbientOpportunity(job, threadId, stringField(job.payload, "preferredAgentId"));
     }
 
     if (job.jobType === "agent.deep_work") {
@@ -319,13 +321,26 @@ export class AgentRuntimeService {
     });
   }
 
-  async runAmbientOpportunity(job: JobRecord, threadId: string): Promise<RuntimeBurstResult> {
+  async runAmbientOpportunity(job: JobRecord, threadId: string, preferredAgentId?: string | null): Promise<RuntimeBurstResult> {
+    return this.runAmbientOpportunityWithPreference(
+      job,
+      threadId,
+      preferredAgentId ?? stringField(job.payload, "preferredAgentId"),
+    );
+  }
+
+  private async runAmbientOpportunityWithPreference(
+    job: JobRecord,
+    threadId: string,
+    preferredAgentId: string | null,
+  ): Promise<RuntimeBurstResult> {
     const settings = await this.runtimeSettings;
     return this.runBoundedBurst({
       job,
       messageId: stringField(job.payload, "messageId") ?? "",
       threadId,
       addressedAgentId: null,
+      preferredAgentId,
       wakeReason: stringField(job.payload, "wakeReason") ?? "ambient_opportunity",
       mode: "ambient",
       maxTurns: 1,
@@ -338,6 +353,7 @@ export class AgentRuntimeService {
     readonly messageId: string;
     readonly threadId: string;
     readonly addressedAgentId?: string | null;
+    readonly preferredAgentId?: string | null;
     readonly wakeReason: string;
     readonly mode: "interactive" | "ambient" | "deep_work";
     readonly maxTurns: number;
@@ -364,6 +380,29 @@ export class AgentRuntimeService {
       : null;
     const profiles = await this.loadProfiles();
     const requestedAgentIds = await this.loadRequestedAgentIds(input.threadId);
+    const selectionActivityRows = await this.dependencies.repositories.agentTurns.getSelectionActivity(
+      profiles.map((profile) => profile.agent.id),
+      input.threadId,
+      this.now(),
+      72,
+    );
+    const activityByAgentId: Readonly<Record<string, AgentSelectionActivity>> = Object.fromEntries(
+      Object.entries(selectionActivityRows).map(([agentId, row]) => [agentId, {
+        lastTurnAt: row.last_turn_at,
+        lastThreadTurnAt: row.last_thread_turn_at,
+        lastAmbientOpportunityAt: row.last_ambient_opportunity_at,
+        recentOpportunityCount: row.recent_opportunity_count,
+        recentMeaningfulContributionCount: row.recent_meaningful_count,
+        recentThreadOpportunityCount: row.recent_thread_opportunity_count,
+        recentThreadMeaningfulContributionCount: row.recent_thread_meaningful_count,
+      }]),
+    );
+    const reputationByAgentId = {
+      ...Object.fromEntries(profiles.map((profile) => [profile.agent.id, (profile.agent.rank - 10) / 10])),
+      ...(this.dependencies.reputation
+        ? await this.dependencies.reputation.selectionSignals(profiles.map((profile) => profile.agent.id))
+        : {}),
+    };
     const hardTurnLimit = input.mode === "interactive"
       ? FOUNDATION_GUARDRAILS.interactiveBurstMaxTurns
       : input.mode === "deep_work"
@@ -409,17 +448,21 @@ export class AgentRuntimeService {
         addressedAgentId: input.addressedAgentId,
         requestedAgentIds: requested,
         recentAgentIds,
-        reputationByAgentId: {
-          ...Object.fromEntries(profiles.map((profile) => [profile.agent.id, (profile.agent.rank - 10) / 10])),
-          ...(this.dependencies.reputation
-            ? await this.dependencies.reputation.selectionSignals(profiles.map((profile) => profile.agent.id))
-            : {}),
-        },
+        activityByAgentId,
+        preferredAgentId: input.preferredAgentId,
+        reputationByAgentId,
+        turnIndex: turnCount,
+        now: this.now(),
+        rng: this.rng,
+      });
+      const decision = chooseCandidateFromScores(scored, {
+        lastAgentId: recentAgentIds.at(-1),
+        addressedAgentId: input.addressedAgentId,
         turnIndex: turnCount,
         rng: this.rng,
       });
-      const candidate = this.chooseCandidate(scored, recentAgentIds.at(-1), input.addressedAgentId, turnCount);
-      if (!candidate) {
+      const candidate = decision.candidate;
+      if (candidate === null) {
         stoppedReason = "no_candidate";
         break;
       }
@@ -437,6 +480,29 @@ export class AgentRuntimeService {
         inputMessageId: input.messageId || undefined,
         wakeReason: input.wakeReason,
         mode: input.mode,
+        selection: this.selectionTelemetry({
+          input,
+          candidate,
+          scored,
+          decision,
+          activity: activityByAgentId[candidate.agentId],
+        }),
+      });
+      await this.dependencies.repositories.events.append({
+        eventType: "runtime.agent_turn_selected",
+        aggregateType: "agent_turn",
+        aggregateId: turn.id,
+        threadId: input.threadId,
+        jobId: input.job.id,
+        actor: { type: "agent", agentId: candidate.agentId },
+        idempotencyKey: `agent-turn-selected:${turn.id}`,
+        payload: this.selectionTelemetry({
+          input,
+          candidate,
+          scored,
+          decision,
+          activity: activityByAgentId[candidate.agentId],
+        }),
       });
       if (turn.status === "completed") {
         turnCount += 1;
@@ -530,17 +596,39 @@ export class AgentRuntimeService {
     };
   }
 
-  private chooseCandidate(
-    scored: readonly ScoredCandidate[],
-    lastAgentId: string | undefined,
-    addressedAgentId: string | null | undefined,
-    turnIndex: number,
-  ): ScoredCandidate | null {
-    if (scored.length === 0) return null;
-    if (turnIndex === 0 && addressedAgentId) {
-      return scored.find((candidate) => candidate.agentId === addressedAgentId) ?? scored[0] ?? null;
-    }
-    return scored.find((candidate) => candidate.agentId !== lastAgentId) ?? scored[0] ?? null;
+  private selectionTelemetry(input: {
+    readonly input: { readonly mode: string; readonly threadId: string; readonly preferredAgentId?: string | null };
+    readonly candidate: ScoredCandidate;
+    readonly scored: readonly ScoredCandidate[];
+    readonly decision: { readonly usedExploration: boolean; readonly explorationPool: readonly string[]; readonly reason: string };
+    readonly activity: AgentSelectionActivity | undefined;
+  }): JsonObject {
+    const round = (value: number): number => Math.round(value * 100) / 100;
+    return {
+      selectedAgentId: input.candidate.agentId,
+      mode: input.input.mode,
+      threadId: input.input.threadId,
+      selectedScore: round(input.candidate.score),
+      relevanceScore: round(input.candidate.relevanceScore),
+      explorationValue: round(input.candidate.explorationValue),
+      reasons: input.candidate.reasons.slice(0, 8),
+      decision: input.decision.reason,
+      explorationUsed: input.decision.usedExploration,
+      explorationPool: input.decision.explorationPool.slice(0, 3),
+      preferredAgentId: input.input.preferredAgentId ?? null,
+      threadRecencyPenalty: round(input.candidate.signals.threadRecencyPenalty),
+      organizationRecencyPenalty: round(input.candidate.signals.organizationRecencyPenalty),
+      neglectedOpportunityBoost: round(input.candidate.signals.neglectedOpportunityBoost),
+      reputationSignal: round(input.candidate.signals.reputationSignal),
+      recentOpportunityCount: input.activity?.recentOpportunityCount ?? 0,
+      recentThreadOpportunityCount: input.activity?.recentThreadOpportunityCount ?? 0,
+      topCandidates: input.scored.slice(0, 3).map((candidate) => ({
+        agentId: candidate.agentId,
+        score: round(candidate.score),
+        relevanceScore: round(candidate.relevanceScore),
+        reasons: candidate.reasons.slice(0, 4),
+      })),
+    };
   }
 
   private async loadProfiles(): Promise<readonly AgentCandidateProfile[]> {
@@ -566,6 +654,7 @@ export class AgentRuntimeService {
     readonly inputMessageId?: string;
     readonly wakeReason: string;
     readonly mode: string;
+    readonly selection: JsonObject;
   }): Promise<AgentTurnRecord> {
     let sequenceNumber = input.sequenceNumber;
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -584,7 +673,11 @@ export class AgentRuntimeService {
           inputMessageId: input.inputMessageId,
           wakeReason: input.wakeReason,
           idempotencyKey,
-          metadata: { mode: input.mode, promptVersion: "phase-03-v2-telegram-html" },
+          metadata: {
+            mode: input.mode,
+            promptVersion: "phase-03-v2-telegram-html",
+            selection: input.selection,
+          },
         });
       } catch (error: unknown) {
         if (!(error instanceof NotFoundError) || attempt === 3) throw error;

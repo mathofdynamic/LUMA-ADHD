@@ -27,7 +27,7 @@ export const ADMIN_SETTING_DEFINITIONS = {
   },
   ambient_opportunity_interval_minutes: {
     label: "Ambient opportunity interval",
-    description: "Minimum interval between an agent's ambient opportunities.",
+    description: "Minimum interval before a quiet thread can receive one bounded ambient opportunity; Agent-level opportunity cooldown is applied during selection.",
     defaultValue: 240,
     min: 60,
     max: 1_440,

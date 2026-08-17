@@ -96,9 +96,19 @@ function parsePayload(value: unknown): JsonObject {
 function agentCard(row: Row): JsonObject {
   const active = booleanValue(row.is_active);
   const running = numberValue(row.running_turns) > 0;
-  const lastActivity = nullableString(row.last_activity_at);
-  const age = lastActivity ? Date.now() - Date.parse(lastActivity) : Number.POSITIVE_INFINITY;
-  const status = !active ? "paused" : running ? "active" : age <= 24 * 60 * 60 * 1000 ? "recent" : "quiet";
+  const lastActivity = nullableString(row.last_meaningful_activity_at) ?? nullableString(row.last_activity_at);
+  const lastOpportunity = nullableString(row.last_opportunity_at);
+  const activityAge = lastActivity ? Date.now() - Date.parse(lastActivity) : Number.POSITIVE_INFINITY;
+  const opportunityAge = lastOpportunity ? Date.now() - Date.parse(lastOpportunity) : Number.POSITIVE_INFINITY;
+  const status = !active
+    ? "paused"
+    : running
+      ? "active"
+      : activityAge <= 24 * 60 * 60 * 1000
+        ? "recent"
+        : opportunityAge <= 24 * 60 * 60 * 1000
+          ? "opportunity"
+          : "quiet";
   return {
     id: stringValue(row.id),
     slug: stringValue(row.slug),
@@ -115,6 +125,22 @@ function agentCard(row: Row): JsonObject {
     lastTurnStatus: nullableString(row.last_turn_status),
     lastTurnAt: nullableString(row.last_turn_at),
     recentMessageAt: nullableString(row.recent_message_at),
+    lastOpportunityAt: lastOpportunity,
+    lastMeaningfulActivityAt: nullableString(row.last_meaningful_activity_at),
+    activity: {
+      opportunities24h: numberValue(row.opportunities_24h),
+      opportunities7d: numberValue(row.opportunities_7d),
+      speak24h: numberValue(row.speak_24h),
+      speak7d: numberValue(row.speak_7d),
+      wait24h: numberValue(row.wait_24h),
+      wait7d: numberValue(row.wait_7d),
+      failed24h: numberValue(row.failed_24h),
+      failed7d: numberValue(row.failed_7d),
+      fileWork24h: numberValue(row.file_work_24h),
+      fileWork7d: numberValue(row.file_work_7d),
+      durableWork24h: numberValue(row.durable_work_24h),
+      durableWork7d: numberValue(row.durable_work_7d),
+    },
   };
 }
 
@@ -218,17 +244,56 @@ export class AdminObservatoryService {
 
   async listAgents(includeGod = true): Promise<readonly JsonObject[]> {
     const result = await this.database.prepare(
-      `SELECT a.*,
+      `WITH turn_activity AS (
+        SELECT at.agent_id,
+          SUM(CASE WHEN at.created_at >= datetime('now','-1 day') THEN 1 ELSE 0 END) AS opportunities_24h,
+          SUM(CASE WHEN at.created_at >= datetime('now','-7 day') THEN 1 ELSE 0 END) AS opportunities_7d,
+          SUM(CASE WHEN at.created_at >= datetime('now','-1 day') AND json_extract(at.metadata_json, '$.intent') = 'SPEAK' THEN 1 ELSE 0 END) AS speak_24h,
+          SUM(CASE WHEN at.created_at >= datetime('now','-7 day') AND json_extract(at.metadata_json, '$.intent') = 'SPEAK' THEN 1 ELSE 0 END) AS speak_7d,
+          SUM(CASE WHEN at.created_at >= datetime('now','-1 day') AND json_extract(at.metadata_json, '$.intent') = 'WAIT' THEN 1 ELSE 0 END) AS wait_24h,
+          SUM(CASE WHEN at.created_at >= datetime('now','-7 day') AND json_extract(at.metadata_json, '$.intent') = 'WAIT' THEN 1 ELSE 0 END) AS wait_7d,
+          SUM(CASE WHEN at.created_at >= datetime('now','-1 day') AND at.status = 'failed' THEN 1 ELSE 0 END) AS failed_24h,
+          SUM(CASE WHEN at.created_at >= datetime('now','-7 day') AND at.status = 'failed' THEN 1 ELSE 0 END) AS failed_7d,
+          SUM(CASE WHEN at.created_at >= datetime('now','-1 day') AND json_extract(at.metadata_json, '$.intent') = 'FILE_WORK' THEN 1 ELSE 0 END) AS file_work_24h,
+          SUM(CASE WHEN at.created_at >= datetime('now','-7 day') AND json_extract(at.metadata_json, '$.intent') = 'FILE_WORK' THEN 1 ELSE 0 END) AS file_work_7d,
+          MAX(at.created_at) AS last_opportunity_at,
+          MAX(CASE WHEN at.status = 'completed' AND COALESCE(json_extract(at.metadata_json, '$.intent'), '') <> 'WAIT' THEN at.created_at END) AS last_turn_meaningful_at
+        FROM agent_turns at
+        WHERE at.created_at >= datetime('now','-7 day')
+        GROUP BY at.agent_id
+      ), durable_activity AS (
+        SELECT e.actor_agent_id AS agent_id,
+          SUM(CASE WHEN e.occurred_at >= datetime('now','-1 day') THEN 1 ELSE 0 END) AS durable_work_24h,
+          SUM(CASE WHEN e.occurred_at >= datetime('now','-7 day') THEN 1 ELSE 0 END) AS durable_work_7d,
+          MAX(e.occurred_at) AS last_durable_work_at
+        FROM events e
+        WHERE e.actor_agent_id IS NOT NULL
+          AND e.occurred_at >= datetime('now','-7 day')
+          AND e.event_type IN ('runtime.file_work_completed', 'runtime.memory_note_created', 'runtime.decision_recorded')
+        GROUP BY e.actor_agent_id
+      )
+      SELECT a.*,
         (SELECT COUNT(*) FROM agent_turns at WHERE at.agent_id = a.id AND at.status = 'running') AS running_turns,
         (SELECT MAX(at.created_at) FROM agent_turns at WHERE at.agent_id = a.id) AS last_turn_at,
         (SELECT at.status FROM agent_turns at WHERE at.agent_id = a.id ORDER BY at.created_at DESC LIMIT 1) AS last_turn_status,
         (SELECT MAX(m.created_at) FROM messages m WHERE m.author_agent_id = a.id AND m.deleted_at IS NULL) AS recent_message_at,
-        (SELECT MAX(m.created_at) FROM messages m WHERE m.author_agent_id = a.id AND m.deleted_at IS NULL) AS last_activity_at,
+        MAX(
+          (SELECT MAX(m.created_at) FROM messages m WHERE m.author_agent_id = a.id AND m.deleted_at IS NULL),
+          ta.last_turn_meaningful_at,
+          da.last_durable_work_at
+        ) AS last_meaningful_activity_at,
+        ta.opportunities_24h, ta.opportunities_7d, ta.speak_24h, ta.speak_7d,
+        ta.wait_24h, ta.wait_7d, ta.failed_24h, ta.failed_7d,
+        ta.file_work_24h, ta.file_work_7d,
+        (SELECT MAX(at.created_at) FROM agent_turns at WHERE at.agent_id = a.id) AS last_opportunity_at,
+        da.durable_work_24h, da.durable_work_7d,
         (SELECT t.id FROM agent_turns at JOIN threads t ON t.id = at.thread_id
          WHERE at.agent_id = a.id AND at.status = 'running' ORDER BY at.created_at DESC LIMIT 1) AS current_thread_id,
         (SELECT t.title FROM agent_turns at JOIN threads t ON t.id = at.thread_id
          WHERE at.agent_id = a.id AND at.status = 'running' ORDER BY at.created_at DESC LIMIT 1) AS current_thread_title
        FROM agents a
+       LEFT JOIN turn_activity ta ON ta.agent_id = a.id
+       LEFT JOIN durable_activity da ON da.agent_id = a.id
        WHERE a.deleted_at IS NULL AND (? = 1 OR a.is_supervisor = 0)
        ORDER BY a.is_supervisor ASC, a.display_name ASC
        LIMIT 20`,
@@ -238,12 +303,12 @@ export class AdminObservatoryService {
 
   async agentDetail(agentId: string): Promise<JsonObject> {
     const agent = await this.repositories.agents.getById(agentId);
-    const [specialties, interests, turns, messages, files, states, snapshots, evidence, usage, config] = await Promise.all([
+    const [specialties, interests, turns, messages, files, states, snapshots, evidence, usage, config, roster] = await Promise.all([
       this.repositories.agents.listSpecialties(agentId),
       this.repositories.agents.listInterests(agentId),
       this.database.prepare(
         `SELECT at.id, at.thread_id, at.sequence_number, at.status, at.wake_reason,
-                at.output_message_id, at.created_at, at.started_at, at.finished_at, t.title AS thread_title
+                at.output_message_id, at.metadata_json, at.created_at, at.started_at, at.finished_at, t.title AS thread_title
          FROM agent_turns at LEFT JOIN threads t ON t.id = at.thread_id
          WHERE at.agent_id = ? ORDER BY at.created_at DESC LIMIT 20`,
       ).bind(agentId).all<Row>(),
@@ -273,9 +338,11 @@ export class AdminObservatoryService {
         `SELECT id, version, provider_role, model_key, prompt_version, config_json, is_active, created_at
          FROM agent_configurations WHERE agent_id = ? ORDER BY version DESC LIMIT 10`,
       ).bind(agentId).all<Row>(),
+      this.listAgents(true),
     ]);
+    const existingAgentSummary = roster.find((item) => stringValue(item.id) === agentId);
     return {
-      ...agentCard({
+      ...(existingAgentSummary ?? agentCard({
         id: agent.id,
         slug: agent.slug,
         display_name: agent.displayName,
@@ -288,14 +355,22 @@ export class AdminObservatoryService {
         running_turns: turns.results.filter((row) => row.status === "running").length,
         last_turn_at: turns.results[0]?.created_at,
         last_turn_status: turns.results[0]?.status,
-      }),
+      })),
       soul: agent.soul,
       personality: agent.personality,
       config: agent.config,
       metadata: agent.metadata,
       specialties: jsonValue(specialties),
       interests: jsonValue(interests),
-      turns: jsonRows(turns.results),
+      turns: jsonRows(turns.results.map((row) => {
+        const metadata = objectValue(row.metadata_json);
+        return {
+          ...row,
+          selection: typeof metadata.selection === "object" && metadata.selection !== null && !Array.isArray(metadata.selection)
+            ? metadata.selection
+            : {},
+        };
+      })),
       messages: jsonRows(messages.results),
       files: jsonValue(files),
       reputation: { states: jsonValue(states), snapshots: jsonRows(snapshots.results), evidence: jsonRows(evidence.results) },
