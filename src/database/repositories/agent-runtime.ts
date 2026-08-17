@@ -131,6 +131,42 @@ export class AgentRequestRepository {
       .all<AgentRequestRow>();
     return result.results.map(mapRequest);
   }
+
+  /**
+   * A REQUEST_AGENT hint is one-shot routing state. Once the requested Agent
+   * receives a selected turn, remove it from the open-request pool so an old
+   * request cannot bias later bursts indefinitely.
+   */
+  async acceptOpenForThreadTarget(input: {
+    readonly threadId: string;
+    readonly requestedAgentId: string;
+    readonly minimumCreatedAt?: string | null;
+  }): Promise<boolean> {
+    const minimumCreatedAt = input.minimumCreatedAt ?? null;
+    const row = await this.database
+      .prepare(
+        `SELECT id FROM agent_requests
+         WHERE thread_id = ?
+           AND requested_agent_id = ?
+           AND status = 'open'
+           AND (? IS NULL OR created_at >= ?)
+         ORDER BY created_at ASC
+         LIMIT 1`,
+      )
+      .bind(input.threadId, input.requestedAgentId, minimumCreatedAt, minimumCreatedAt)
+      .first<{ id: string }>();
+    if (!row) return false;
+
+    const updated = await this.database
+      .prepare(
+        `UPDATE agent_requests
+         SET status = 'accepted', updated_at = ?
+         WHERE id = ? AND status = 'open'`,
+      )
+      .bind(nowIso(), row.id)
+      .run();
+    return updated.meta.changes === 1;
+  }
 }
 
 export class AgentVoteRepository {

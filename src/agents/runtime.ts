@@ -512,6 +512,16 @@ export class AgentRuntimeService {
         break;
       }
 
+      if (requested.includes(candidate.agentId)) {
+        await this.dependencies.repositories.agentRequests.acceptOpenForThreadTarget({
+          threadId: input.threadId,
+          requestedAgentId: candidate.agentId,
+          minimumCreatedAt: input.mode === "interactive"
+            ? anchorMessage?.createdAt ?? wakeMessage?.createdAt ?? null
+            : null,
+        });
+      }
+
       const turn = await this.createOrGetTurn({
         job: input.job,
         thread,
