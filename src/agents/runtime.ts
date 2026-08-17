@@ -39,10 +39,12 @@ import { ContextPackService } from "../memory/retrieval";
 import type { MemoryServices } from "../memory";
 import type { ReputationService } from "../reputation/service";
 import { assessOfficialGrounding, type OfficialGroundingAssessment } from "./grounding";
+import { assessCurrentStateGrounding, qualifyUnsupportedCurrentClaim, type CurrentStateGroundingAssessment } from "./grounding";
 import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 import { HumanTaskService } from "../human-tasks";
 import { DiagramService } from "../diagrams";
-import { isObviousRepeatedContent } from "./repetition";
+import { assessContributionDuplication, isObviousRepeatedContent } from "./repetition";
+import { buildConversationFocus, type ConversationFocus } from "./conversation-focus";
 import { countDailyAutonomyJobs, nextUtcDay } from "../autonomy-budgets";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
@@ -82,6 +84,10 @@ interface TurnContext {
   readonly replyToMessageId: string | undefined;
   readonly wakeReason: string;
   readonly settings: EffectiveRuntimeSettings;
+  readonly conversationFocus: ConversationFocus;
+  readonly coveredDomains: readonly string[];
+  readonly contributionRole: "CONTRIBUTE" | "SYNTHESIZE";
+  readonly priorBurstContributions: readonly string[];
 }
 
 interface TurnExecutionResult {
@@ -133,6 +139,8 @@ function actionMetadata(
   retrievalTelemetry?: JsonObject,
   acquisitionOperations = 0,
   grounding?: OfficialGroundingAssessment,
+  currentStateGrounding?: CurrentStateGroundingAssessment,
+  repetitionSuppressed = false,
 ): JsonObject {
   return {
     intent: action.intent,
@@ -150,6 +158,15 @@ function actionMetadata(
       matchedTerms: grounding.matchedTerms,
       bestSourceMatchCount: grounding.bestSourceMatchCount,
     } : {},
+    currentStateGrounding: currentStateGrounding ? {
+      claimDetected: currentStateGrounding.claimDetected,
+      supported: currentStateGrounding.supported,
+      evidenceKinds: currentStateGrounding.evidenceKinds,
+      matchedTerms: currentStateGrounding.matchedTerms,
+      proposalOnly: currentStateGrounding.proposalOnly,
+      state: currentStateGrounding.state,
+    } : {},
+    repetitionSuppressed,
     actionMetadata: action.metadata,
   };
 }
@@ -162,10 +179,6 @@ function groundingMetadata(grounding: OfficialGroundingAssessment): JsonObject {
     matchedTerms: grounding.matchedTerms,
     bestSourceMatchCount: grounding.bestSourceMatchCount,
   };
-}
-
-function messageTextForSelection(message: MessageRecord | null, thread: ThreadRecord): string {
-  return message?.contentText ?? thread.summary ?? thread.title;
 }
 
 export class AgentRuntimeService {
@@ -378,8 +391,14 @@ export class AgentRuntimeService {
     const wakeMessage = input.messageId.length > 0
       ? await this.dependencies.repositories.messages.getById(input.messageId).catch(() => null)
       : null;
+    const anchorMessage = wakeMessage?.replyToMessageId
+      ? await this.dependencies.repositories.messages.getById(wakeMessage.replyToMessageId).catch(() => null)
+      : null;
     const profiles = await this.loadProfiles();
-    const requestedAgentIds = await this.loadRequestedAgentIds(input.threadId);
+    const requestedAgentIds = await this.loadRequestedAgentIds(
+      input.threadId,
+      input.mode === "interactive" ? anchorMessage?.createdAt ?? wakeMessage?.createdAt ?? null : null,
+    );
     const selectionActivityRows = await this.dependencies.repositories.agentTurns.getSelectionActivity(
       profiles.map((profile) => profile.agent.id),
       input.threadId,
@@ -414,6 +433,7 @@ export class AgentRuntimeService {
       input.threadId,
       input.settings.recentMessageContextCount,
     )).filter((message) => message.visibility !== "private");
+    let conversationFocus = buildConversationFocus({ thread, wakeMessage, anchorMessage, recentMessages });
 
     let turnCount = existingTurns.length;
     let completedTurns = existingTurns.filter((turn) => turn.status === "completed").length;
@@ -430,6 +450,13 @@ export class AgentRuntimeService {
       .map((turn) => turn.agentId)
       .filter((agentId): agentId is string => typeof agentId === "string");
     const requested = [...requestedAgentIds];
+    const coveredDomains = new Set<string>();
+    const priorBurstContributions: string[] = [];
+    for (const existingTurn of existingTurns) {
+      if (!existingTurn.outputMessageId) continue;
+      const output = await this.dependencies.repositories.messages.getById(existingTurn.outputMessageId).catch(() => null);
+      if (output?.contentText) priorBurstContributions.push(output.contentText);
+    }
 
     while (turnCount < maxTurns) {
       if (input.mode === "interactive" && publicMessages >= 4) {
@@ -441,9 +468,16 @@ export class AgentRuntimeService {
         break;
       }
 
+      conversationFocus = buildConversationFocus({ thread, wakeMessage, anchorMessage, recentMessages });
+      const contributionRole = input.mode === "interactive"
+        && conversationFocus.isBroadQuestion
+        && coveredDomains.size >= 2
+        && turnCount >= 2
+        ? "SYNTHESIZE" as const
+        : "CONTRIBUTE" as const;
       const scored = scoreCandidates({
         profiles,
-        messageText: messageTextForSelection(wakeMessage, thread),
+        messageText: conversationFocus.selectionQuery,
         thread,
         addressedAgentId: input.addressedAgentId,
         requestedAgentIds: requested,
@@ -453,6 +487,11 @@ export class AgentRuntimeService {
         reputationByAgentId,
         turnIndex: turnCount,
         now: this.now(),
+        mode: input.mode,
+        isBroadQuestion: conversationFocus.isBroadQuestion,
+        coveredDomains: [...coveredDomains],
+        contributionRole,
+        ambientOpportunityIntervalMinutes: input.settings.ambientOpportunityIntervalMinutes,
         rng: this.rng,
       });
       const decision = chooseCandidateFromScores(scored, {
@@ -460,6 +499,7 @@ export class AgentRuntimeService {
         addressedAgentId: input.addressedAgentId,
         turnIndex: turnCount,
         rng: this.rng,
+        mode: input.mode,
       });
       const candidate = decision.candidate;
       if (candidate === null) {
@@ -486,6 +526,9 @@ export class AgentRuntimeService {
           scored,
           decision,
           activity: activityByAgentId[candidate.agentId],
+          focus: conversationFocus,
+          coveredDomains: [...coveredDomains],
+          contributionRole,
         }),
       });
       await this.dependencies.repositories.events.append({
@@ -502,6 +545,9 @@ export class AgentRuntimeService {
           scored,
           decision,
           activity: activityByAgentId[candidate.agentId],
+          focus: conversationFocus,
+          coveredDomains: [...coveredDomains],
+          contributionRole,
         }),
       });
       if (turn.status === "completed") {
@@ -526,12 +572,23 @@ export class AgentRuntimeService {
         replyToMessageId,
         wakeReason: input.wakeReason,
         settings: input.settings,
+        conversationFocus,
+        coveredDomains: [...coveredDomains],
+        contributionRole,
+        priorBurstContributions: [...priorBurstContributions],
       });
       await this.dependencies.repositories.threads.incrementTurnUsage(input.threadId, this.now());
       turnCount += 1;
       recentAgentIds.push(profile.agent.id);
       if (result.action?.intent === "REQUEST_AGENT" && result.action.targetAgentId) {
         requested.push(result.action.targetAgentId);
+      }
+      if (result.action?.intent === "SPEAK" && result.outputMessageId) {
+        const domain = profiles.find((item) => item.agent.id === profile.agent.id)?.specialties.find((item) => item.isPrimary)?.domain
+          ?? profiles.find((item) => item.agent.id === profile.agent.id)?.specialties[0]?.domain;
+        if (domain) coveredDomains.add(domain);
+        const outputMessage = await this.dependencies.repositories.messages.getById(result.outputMessageId).catch(() => null);
+        if (outputMessage?.contentText) priorBurstContributions.push(outputMessage.contentText);
       }
       if (result.wait) waits += 1;
       if (result.action !== null) completedTurns += 1;
@@ -602,6 +659,9 @@ export class AgentRuntimeService {
     readonly scored: readonly ScoredCandidate[];
     readonly decision: { readonly usedExploration: boolean; readonly explorationPool: readonly string[]; readonly reason: string };
     readonly activity: AgentSelectionActivity | undefined;
+    readonly focus: ConversationFocus;
+    readonly coveredDomains: readonly string[];
+    readonly contributionRole: "CONTRIBUTE" | "SYNTHESIZE";
   }): JsonObject {
     const round = (value: number): number => Math.round(value * 100) / 100;
     return {
@@ -620,12 +680,32 @@ export class AgentRuntimeService {
       organizationRecencyPenalty: round(input.candidate.signals.organizationRecencyPenalty),
       neglectedOpportunityBoost: round(input.candidate.signals.neglectedOpportunityBoost),
       reputationSignal: round(input.candidate.signals.reputationSignal),
+      lexicalRelevance: round(input.candidate.signals.lexicalRelevance),
+      phaseFit: input.candidate.signals.phaseFit,
+      perspectiveDomain: input.candidate.signals.perspectiveDomain,
+      relevant: input.candidate.signals.relevant,
+      coverageBonus: round(input.candidate.signals.coverageBonus),
+      coveragePenalty: round(input.candidate.signals.coveragePenalty),
+      ambientCooldownPenalty: round(input.candidate.signals.ambientCooldownPenalty),
+      conversationFocus: {
+        primaryQuery: input.focus.primaryQuery,
+        interactionIntent: input.focus.interactionIntent,
+        keyTerms: input.focus.keyTerms,
+        isBroadQuestion: input.focus.isBroadQuestion,
+        isCurrentStateQuestion: input.focus.isCurrentStateQuestion,
+      },
+      coveredDomains: input.coveredDomains.slice(0, 8),
+      contributionRole: input.contributionRole,
       recentOpportunityCount: input.activity?.recentOpportunityCount ?? 0,
       recentThreadOpportunityCount: input.activity?.recentThreadOpportunityCount ?? 0,
-      topCandidates: input.scored.slice(0, 3).map((candidate) => ({
+      topCandidates: input.scored.slice(0, 8).map((candidate) => ({
         agentId: candidate.agentId,
         score: round(candidate.score),
         relevanceScore: round(candidate.relevanceScore),
+        perspectiveDomain: candidate.signals.perspectiveDomain,
+        lexicalRelevance: round(candidate.signals.lexicalRelevance),
+        coverageBonus: round(candidate.signals.coverageBonus),
+        coveragePenalty: round(candidate.signals.coveragePenalty),
         reasons: candidate.reasons.slice(0, 4),
       })),
     };
@@ -641,9 +721,11 @@ export class AgentRuntimeService {
     })));
   }
 
-  private async loadRequestedAgentIds(threadId: string): Promise<readonly string[]> {
+  private async loadRequestedAgentIds(threadId: string, minimumCreatedAt: string | null = null): Promise<readonly string[]> {
     return this.dependencies.repositories.agentRequests.listOpenForThread(threadId)
-      .then((requests) => requests.map((request) => request.requestedAgentId));
+      .then((requests) => requests
+        .filter((request) => minimumCreatedAt === null || request.createdAt >= minimumCreatedAt)
+        .map((request) => request.requestedAgentId));
   }
 
   private async createOrGetTurn(input: {
@@ -675,7 +757,7 @@ export class AgentRuntimeService {
           idempotencyKey,
           metadata: {
             mode: input.mode,
-            promptVersion: "phase-03-v2-telegram-html",
+            promptVersion: "postv1-interactive-quality-v1",
             selection: input.selection,
           },
         });
@@ -696,7 +778,7 @@ export class AgentRuntimeService {
     const human = context.wakeMessage?.authorUserId
       ? await this.dependencies.repositories.users.getById(context.wakeMessage.authorUserId).catch(() => null)
       : null;
-    const query = context.wakeMessage?.contentText ?? thread.summary ?? thread.title;
+    const query = context.conversationFocus.retrievalQuery || thread.summary || thread.title;
     const contextPack = await (this.dependencies.memory
       ? this.dependencies.memory.context.build({
         query,
@@ -739,6 +821,9 @@ export class AgentRuntimeService {
       recentMessages: context.recentMessages,
       addressedAgentId: context.addressedAgentId,
       requestedAgentIds: context.requestedAgentIds,
+      conversationFocus: context.conversationFocus,
+      coveredDomains: context.coveredDomains,
+      contributionRole: context.contributionRole,
       participants,
       humanDisplayName: human?.displayName,
       reputationContext: {
@@ -800,6 +885,9 @@ export class AgentRuntimeService {
             `human_display_name: ${human?.displayName ?? "none"}`,
             `thread_objective: ${thread.summary ?? thread.title}`,
             `wake_reason: ${context.wakeReason}`,
+            `conversation_focus: ${context.conversationFocus.primaryQuery}`,
+            `covered_perspectives: ${context.coveredDomains.join(", ") || "none"}`,
+            "Return WAIT rather than paraphrasing an already-covered contribution.",
             `addressed_agent_id: ${context.addressedAgentId ?? "none"}`,
             `known_participants: ${context.profiles.map((profile) => `${profile.agent.id}=${profile.agent.displayName}`).join(", ") || "none"}`,
             `recent_context:\n${recentContext || "none"}`,
@@ -947,19 +1035,92 @@ export class AgentRuntimeService {
       return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true, repetitionSuppressed: false };
     }
 
-    const action = step.action;
+    let action: AgentAction = step.action;
+    let currentStateGrounding: CurrentStateGroundingAssessment = {
+      claimDetected: false,
+      supported: true,
+      evidenceKinds: [],
+      matchedTerms: [],
+      proposalOnly: false,
+      state: "not_applicable",
+    };
+    let repetitionSuppressed = false;
+    if (action.intent === "SPEAK") {
+      currentStateGrounding = assessCurrentStateGrounding(action.content ?? "", contextPack);
+      if (currentStateGrounding.claimDetected && !currentStateGrounding.supported) {
+        action = {
+          ...action,
+          content: qualifyUnsupportedCurrentClaim(action.content ?? "", currentStateGrounding),
+          reasonSummary: "Qualified unsupported current-state ranking as a hypothesis.",
+          metadata: {
+            ...action.metadata,
+            currentStateGrounding: {
+              state: currentStateGrounding.state,
+              matchedTerms: currentStateGrounding.matchedTerms,
+            },
+          },
+        };
+      }
+      const previousContributions = [
+        ...context.recentMessages.filter((message) => message.authorType === "agent").map((message) => message.contentText),
+        ...context.priorBurstContributions,
+      ];
+      const duplicate = isObviousRepeatedContent(action.content ?? "", previousContributions)
+        ? {
+            duplicate: true,
+            similarity: 1,
+            sharedTerms: [],
+            reason: "near_exact" as const,
+          }
+        : assessContributionDuplication(action.content ?? "", previousContributions);
+      if (duplicate.duplicate) {
+        repetitionSuppressed = true;
+        await this.dependencies.repositories.events.append({
+          eventType: "runtime.repeated_content_suppressed",
+          aggregateType: "agent_turn",
+          aggregateId: turn.id,
+          threadId: thread.id,
+          jobId: context.job.id,
+          actor: { type: "agent", agentId: agent.id },
+          idempotencyKey: `agent-action:${turn.id}:repetition`,
+          payload: {
+            contentCharacters: Array.from(action.content ?? "").length,
+            similarity: duplicate.similarity,
+            sharedTerms: duplicate.sharedTerms,
+            reason: duplicate.reason,
+          },
+        });
+        action = {
+          intent: "WAIT",
+          content: null,
+          confidence: Math.min(action.confidence, 0.8),
+          reasonSummary: "No materially distinct contribution beyond the prior Agent message.",
+          targetAgentId: null,
+          targetThreadId: null,
+          metadata: {
+            ...action.metadata,
+            suppressedIntent: "SPEAK",
+            duplication: {
+              duplicate: duplicate.duplicate,
+              similarity: duplicate.similarity,
+              sharedTerms: duplicate.sharedTerms,
+              reason: duplicate.reason,
+            },
+          },
+        };
+      }
+    }
 
     let outputMessageId: string | undefined;
     let deliveryStatus: string | undefined;
-    let repetitionSuppressed = false;
     try {
       const execution = await this.executeAction(context, action);
       outputMessageId = execution.outputMessageId;
       deliveryStatus = execution.deliveryStatus;
-      repetitionSuppressed = execution.repetitionSuppressed ?? false;
+      repetitionSuppressed = repetitionSuppressed || execution.repetitionSuppressed === true;
     } catch (error: unknown) {
       await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
-        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding),
+        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding, currentStateGrounding, repetitionSuppressed),
         executionFailure: safeErrorSummary(error),
       });
       await this.dependencies.repositories.events.append({
@@ -980,7 +1141,7 @@ export class AgentRuntimeService {
       "completed",
       outputMessageId,
       {
-        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding),
+        ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding, currentStateGrounding, repetitionSuppressed),
         provider: response.provider,
         model: response.model,
         requestId: response.requestId ?? null,
@@ -1084,22 +1245,6 @@ export class AgentRuntimeService {
       case "SPEAK": {
         const content = action.content as string;
         const projectionKey = `agent-output:${context.job.id}:${context.turn.sequenceNumber}:${context.agent.id}`;
-        const previousAgentContent = context.recentMessages
-          .filter((message) => message.authorType === "agent")
-          .map((message) => message.contentText);
-        if (isObviousRepeatedContent(content, previousAgentContent)) {
-          await this.dependencies.repositories.events.append({
-            eventType: "runtime.repeated_content_suppressed",
-            aggregateType: "agent_turn",
-            aggregateId: context.turn.id,
-            threadId: context.thread.id,
-            jobId: context.job.id,
-            actor: { type: "agent", agentId: context.agent.id },
-            idempotencyKey: `${actionKey}:repetition`,
-            payload: { contentCharacters: Array.from(content).length },
-          });
-          return { repetitionSuppressed: true };
-        }
         await this.dependencies.repositories.threads.addParticipant(context.thread.id, {
           agentId: context.agent.id,
           role: "contributor",

@@ -22,6 +22,38 @@ Selection then applies bounded policy signals:
 - a small candidate-specific exploration value;
 - a capped neglected-opportunity boost for relevant Agents with little recent opportunity.
 
+Interactive human discussions use a stricter relevance gate than ambient work.
+An open-thread phase is a ranking hint, not enough by itself to make a normal
+Agent relevant to a human's question. If no topic signal can be extracted at
+all, one explicitly marked phase fallback may keep a malformed/very short
+request observable; it never competes with a real specialist match. Ambient
+work may use phase fit to find a useful opportunity after the scheduler has
+confirmed that the Agent-level interval is due.
+
+Interactive turns build a bounded `ConversationFocus` from the latest
+substantive human request, thread objective, current human nudge intent, the
+latest meaningful contribution, and the unresolved question. A reply such as
+"کسی نیست جواب منو بده؟" therefore retains the preceding question instead of
+becoming the retrieval query. Focus is rebuilt after each completed turn.
+
+For broad cross-functional questions, selection tracks covered domains such as
+`product_strategy`, `customer_experience`, `engineering_architecture`, and
+`finance_pricing`. An uncovered relevant perspective gets a small bonus and an
+already-covered perspective gets a small penalty. This is coverage-aware
+routing, not round-robin participation. Explicit address and valid
+`REQUEST_AGENT` signals remain stronger.
+
+Every selected Agent receives a distinct-contribution instruction. It should
+answer the human first, add a materially new perspective or evidence, challenge
+a weak assumption, synthesize when useful, or return `WAIT`. Bounded lexical
+concept overlap suppresses a semantic restatement before public projection.
+
+Current-state rankings require current evidence. Future plans and proposals
+can support hypotheses, but cannot establish claims such as "the three main
+current problems" without measured signals, decisions, or comparable durable
+evidence. Unsupported ranking language is qualified and its evidence state is
+stored in turn metadata.
+
 Direct address is deterministic for the first turn. Exploration is restricted
 to the top relevant pool and is never a roster rotation. An irrelevant quiet
 Agent remains quiet. A neglected relevant specialist receives a chance when the
@@ -36,7 +68,8 @@ time, and completed non-`WAIT` contribution counts. The current burst still
 uses its local recency list for immediate consecutive-turn protection.
 
 Selection telemetry stores only compact scores, high-level reasons, bounded top
-candidates, and recency/exploration signals. It does not store hidden model
+candidates, perspective/coverage signals, conversation-focus keys, grounding
+state, and duplicate-suppression state. It does not store hidden model
 reasoning or full candidate dumps.
 
 ## Ambient autonomy

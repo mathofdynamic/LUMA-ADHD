@@ -42,6 +42,11 @@ function hoursSince(asOf: string, earlier: string): number {
   return Number.isFinite(difference) ? difference / 3_600_000 : 0;
 }
 
+function ambientOpportunityDue(asOf: string, lastOpportunityAt: string | null, intervalMinutes: number): boolean {
+  if (!lastOpportunityAt) return true;
+  return hoursSince(asOf, lastOpportunityAt) >= intervalMinutes / 60;
+}
+
 export class AgentScheduler {
   private readonly now: () => string;
   private readonly rng: () => number;
@@ -101,6 +106,14 @@ export class AgentScheduler {
         asOf,
         72,
       );
+      const dueAgentIds = profiles
+        .map((profile) => profile.agent.id)
+        .filter((agentId) => ambientOpportunityDue(asOf, activityRows[agentId]?.last_ambient_opportunity_at ?? null, settings.ambientOpportunityIntervalMinutes));
+      // A quiet thread is only an opportunity container. Do not create work
+      // when every normal Agent has recently received an ambient opportunity.
+      // This keeps the setting's Agent-opportunity semantics without waking
+      // all eight Agents or increasing the autonomous activity budget.
+      if (dueAgentIds.length === 0) continue;
       const preferred = selectNextAgent({
         profiles,
         messageText: [candidate.thread.title, candidate.thread.summary ?? ""].join(" "),
@@ -117,6 +130,9 @@ export class AgentScheduler {
         reputationByAgentId: Object.fromEntries(profiles.map((profile) => [profile.agent.id, (profile.agent.rank - 10) / 10])),
         turnIndex: 0,
         now: asOf,
+        mode: "ambient",
+        ambientOpportunityIntervalMinutes: settings.ambientOpportunityIntervalMinutes,
+        eligibleAgentIds: dueAgentIds,
         explorationRate: 0,
         rng: this.rng,
       });

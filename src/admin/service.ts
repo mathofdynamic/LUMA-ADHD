@@ -364,11 +364,22 @@ export class AdminObservatoryService {
       interests: jsonValue(interests),
       turns: jsonRows(turns.results.map((row) => {
         const metadata = objectValue(row.metadata_json);
+        const selection = typeof metadata.selection === "object" && metadata.selection !== null && !Array.isArray(metadata.selection)
+          ? metadata.selection as JsonObject
+          : {};
         return {
           ...row,
-          selection: typeof metadata.selection === "object" && metadata.selection !== null && !Array.isArray(metadata.selection)
-            ? metadata.selection
-            : {},
+          selection,
+          selectionDiagnostics: {
+            selectedAgentId: selection.selectedAgentId,
+            perspectiveDomain: selection.perspectiveDomain,
+            reasons: selection.reasons,
+            conversationFocus: selection.conversationFocus,
+            coveredDomains: selection.coveredDomains,
+            coverageBonus: selection.coverageBonus,
+            coveragePenalty: selection.coveragePenalty,
+            explorationUsed: selection.explorationUsed,
+          },
         };
       })),
       messages: jsonRows(messages.results),

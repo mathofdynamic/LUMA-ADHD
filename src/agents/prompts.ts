@@ -8,6 +8,7 @@ import type {
 import { AGENT_STEP_SCHEMA, actionExample } from "./actions";
 import type { ContextPackTelemetry } from "../memory/types";
 import type { LLMMessage } from "../llm";
+import type { ConversationFocus } from "./conversation-focus";
 
 export interface PromptParticipant {
   readonly id: string;
@@ -32,6 +33,9 @@ export interface AgentPromptContext {
   readonly retrievedContext?: string;
   readonly retrievalTelemetry?: ContextPackTelemetry;
   readonly acquisitionContext?: readonly string[];
+  readonly conversationFocus?: ConversationFocus;
+  readonly coveredDomains?: readonly string[];
+  readonly contributionRole?: "CONTRIBUTE" | "SYNTHESIZE";
 }
 
 export interface BuiltAgentPrompt {
@@ -113,6 +117,9 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
   const addressedParticipant = context.addressedAgentId
     ? participantMap.get(context.addressedAgentId)
     : undefined;
+  const focus = context.conversationFocus;
+  const interactiveHumanWake = /(?:^|_)human(?:_|$)/u.test(context.wakeReason) || context.wakeReason === "new_human_message";
+  const covered = context.coveredDomains?.join(", ") || "none";
 
   const systemPrompt = [
     "You are one normal LUMA ADHD agent. Return exactly one validated JSON step (a bounded acquisition request or a final action) and no prose outside JSON.",
@@ -133,6 +140,15 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     `thread_state: ${context.thread.state}`,
     `thread_objective: ${context.thread.summary ?? context.thread.title}`,
     `wake_reason: ${context.wakeReason}`,
+    `conversation_focus: ${focus?.primaryQuery ?? context.thread.summary ?? context.thread.title}`,
+    `interaction_intent: ${focus?.interactionIntent ?? "substantive"}`,
+    `unresolved_question: ${focus?.unresolvedQuestion ?? "none"}`,
+    `recent_development: ${focus?.recentDevelopment ?? "none"}`,
+    `focus_key_terms: ${focus?.keyTerms.join(", ") || "none"}`,
+    `broad_cross_functional_question: ${focus?.isBroadQuestion ? "yes" : "no"}`,
+    `current_state_question: ${focus?.isCurrentStateQuestion ? "yes" : "no"}`,
+    `covered_perspectives: ${covered}`,
+    `contribution_role: ${context.contributionRole ?? "CONTRIBUTE"}`,
     `addressed_agent_id: ${context.addressedAgentId ?? "none"}`,
     `addressed_agent_name: ${addressedParticipant?.displayName ?? "none"}`,
     `requested_agent_ids: ${context.requestedAgentIds?.join(", ") || "none"}`,
@@ -145,6 +161,12 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     "memory_capability: Automatic bounded retrieval runs before every meaningful turn. You can request a bounded search/read acquisition when the supplied context is insufficient. Search before creating durable work when practical.",
     "grounding_policy: Use supplied authoritative LUMA knowledge for current company/product facts. Official LUMA material outranks generic model memory, unsupported assumptions, and stale casual discussion. Distinguish CURRENT OFFICIAL FACT from PROPOSED CHANGE or OPINION. If stored evidence is insufficient, state uncertainty or acquire more information; do not invent LUMA facts.",
     "grounding_execution: When the retrieval telemetry includes official LUMA knowledge for a factual company/product question, base factual claims on those excerpts. Do not replace them with a generic definition. If the excerpts do not support a claim, qualify it or acquire more information.",
+    "evidence_discipline: Distinguish known current facts, observed signals, inferences, hypotheses, and proposals. A current-state ranking such as 'the three main problems' or 'the top priority' requires current evidence; a proposal or future plan is not proof of present reality. If the evidence is insufficient, say so, identify hypotheses, name the missing evidence, or request human input only when genuinely necessary.",
+    interactiveHumanWake
+      ? "human_priority: This is human-triggered work. Answer or advance the human's actual request first. Do not replace a direct answer with unrelated generic file work, experiments, or organizational activity."
+      : "autonomy_priority: This is autonomous work. Durable file or memory work and a bounded WAIT are valid; do not manufacture public speech.",
+    "distinct_contribution_contract: Read the recent contributions before acting. If your materially distinct useful contribution is absent, return WAIT. Do not paraphrase a prior Agent, repeat the same problem list, or invent disagreement. Add a new specialist perspective, challenge a weak assumption with evidence, resolve an open question, synthesize distinct contributions when assigned, or WAIT.",
+    `coverage_instruction: Already-covered perspectives are ${covered}. Prefer a relevant uncovered perspective when one exists; coverage never overrides subject relevance.`,
     `retrieval_telemetry: ${context.retrievalTelemetry ? JSON.stringify(context.retrievalTelemetry) : "none"}`,
     `bounded_retrieval_context:\n${context.retrievedContext ?? "none"}`,
     `bounded_acquisition_results:\n${context.acquisitionContext?.join("\n\n") || "none"}`,
@@ -166,6 +188,11 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
 
   return {
     systemPrompt,
-    messages: [{ role: "user", content: "Choose the single most useful next action for this bounded turn." }],
+    messages: [{
+      role: "user",
+      content: interactiveHumanWake
+        ? "Answer or advance the human's actual request with one distinct, evidence-aware bounded action. If you cannot add material value beyond the prior contributions, return WAIT."
+        : "Choose the single most useful next action for this bounded turn.",
+    }],
   };
 }
