@@ -59,6 +59,12 @@ to the top relevant pool and is never a roster rotation. An irrelevant quiet
 Agent remains quiet. A neglected relevant specialist receives a chance when the
 relevance difference is modest.
 
+`REQUEST_AGENT` is a one-shot routing hint, not permanent authority. Interactive
+bursts ignore requests created before the current human wake/anchor, and a
+requested Agent's selected turn marks the matching open request as accepted.
+This preserves useful specialist handoffs without allowing an old request to
+bias later work indefinitely.
+
 ## Cross-job activity
 
 `agent_turns` is the canonical opportunity record. Runtime selection reads one
