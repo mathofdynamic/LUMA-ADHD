@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 
 import { routeApi } from "../src/api/router";
 import type { AdminApiEnvironment } from "../src/admin/router";
+import { createRepositories } from "../src/database/repositories";
 
 const secret = "phase06-test-operator-access-key-0123456789";
 
@@ -105,5 +106,66 @@ describe("Admin Observatory authentication", () => {
     );
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBeTruthy();
+  });
+
+  it("serves historical Agent turn metadata without serialization failures", async () => {
+    const repositories = createRepositories(env.DB);
+    const chat = await repositories.chats.create({
+      id: `admin-legacy-chat-${crypto.randomUUID()}`,
+      chatType: "internal",
+      isWorkspace: true,
+    });
+    const thread = await repositories.threads.create({
+      id: `admin-legacy-thread-${crypto.randomUUID()}`,
+      chatId: chat.id,
+      title: "Admin legacy metadata compatibility",
+    });
+    const metadataShapes = [
+      { mode: "phase03" },
+      { mode: "phase03", selection: {} },
+      { mode: "phase03", selection: [] },
+      { mode: "phase10", selection: { decision: "highest_bounded_value", reasons: ["phase fit"] } },
+      {
+        mode: "postv1",
+        selection: {
+          selectedAgentId: "agent-product",
+          perspectiveDomain: "product_strategy",
+          reasons: ["specialty relevance"],
+          conversationFocus: { primaryQuery: "legacy metadata" },
+          coveredDomains: ["product_strategy"],
+          coverageBonus: 0.4,
+          coveragePenalty: 0,
+          explorationUsed: false,
+        },
+      },
+      { mode: "partial", selection: { perspectiveDomain: null, conversationFocus: [], reasons: "legacy" } },
+    ] as const;
+    for (const [index, metadata] of metadataShapes.entries()) {
+      await repositories.agentTurns.create({
+        id: `admin-legacy-turn-${crypto.randomUUID()}`,
+        threadId: thread.id,
+        agentId: "agent-product",
+        sequenceNumber: index + 1,
+        metadata,
+      });
+    }
+
+    const session = await login("198.51.100.15");
+    const response = await routeApi(
+      new Request("https://luma.test/api/admin/agents/agent-product", { headers: { cookie: session.cookie } }),
+      environment(),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { turns: readonly Record<string, unknown>[] };
+    const fixtureTurns = payload.turns.filter((turn) => String(turn.id).startsWith("admin-legacy-turn-"));
+    expect(fixtureTurns).toHaveLength(metadataShapes.length);
+    for (const turn of fixtureTurns) {
+      const diagnostics = turn.selectionDiagnostics as Record<string, unknown>;
+      expect(diagnostics).toBeDefined();
+      expect(Array.isArray(diagnostics.reasons)).toBe(true);
+      expect(Array.isArray(diagnostics.coveredDomains)).toBe(true);
+      expect(JSON.stringify(turn)).not.toContain("undefined");
+    }
   });
 });
