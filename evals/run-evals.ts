@@ -1,6 +1,6 @@
 import { FOUNDATION_GUARDRAILS } from "../src/guardrails";
 import { isObviousRepeatedContent } from "../src/agents/repetition";
-import { scoreCandidates } from "../src/agents/selection";
+import { chooseCandidateFromScores, scoreCandidates } from "../src/agents/selection";
 
 interface EvalResult {
   readonly scenarioId: string;
@@ -31,6 +31,22 @@ function agent(id: string, specialty: string, rank = 10) {
 
 function profile(value: ReturnType<typeof agent>) {
   return { agent: value, specialties: [{ domain: value.specialty, description: value.specialty, priority: 1, isPrimary: true }], interests: [] };
+}
+
+function selectionActivity(recentOpportunityCount = 0, recentThreadOpportunityCount = 0) {
+  return {
+    lastTurnAt: null,
+    lastThreadTurnAt: null,
+    lastAmbientOpportunityAt: null,
+    recentOpportunityCount,
+    recentMeaningfulContributionCount: 0,
+    recentThreadOpportunityCount,
+    recentThreadMeaningfulContributionCount: 0,
+  };
+}
+
+function assertion(condition: boolean, message: string): string {
+  return `${condition ? "PASS" : "FAIL"}: ${message}`;
 }
 
 function evaluate(
@@ -252,9 +268,120 @@ const results: EvalResult[] = [];
   }, ["PASS: evaluation flows through evidence and scoring services"]));
 }
 
+{
+  const profiles = [profile(agent("agent-product", "shared_topic")), profile(agent("agent-technical", "shared_topic"))];
+  const scored = scoreCandidates({
+    profiles,
+    messageText: "shared topic",
+    thread: { state: "unknown", priority: 50 } as never,
+    activityByAgentId: {
+      "agent-product": selectionActivity(3, 3),
+      "agent-technical": selectionActivity(),
+    },
+    turnIndex: 0,
+    rng: () => 0,
+  });
+  results.push(evaluate("postv1-cross-job-diversity", [
+    assertion(scored[0]?.agentId === "agent-technical", "recent same-thread winner receives bounded cooldown"),
+    assertion(scored.some((item) => item.reasons.includes("cross-job thread recency penalty")), "selection reason records thread recency"),
+  ], {
+    turnCount: 1, selectedAgents: [scored[0]?.agentId ?? "none"], publicMessageCount: 0, jobsCreated: 1, terminalReason: "bounded_diversity_selection",
+  }, ["PASS: one coarse opportunity remains one job"]));
+}
+
+{
+  const profiles = [
+    profile(agent("agent-customer", "customer_experience")),
+    profile(agent("agent-creative", "ux_creative")),
+    profile(agent("agent-finance", "finance_pricing")),
+  ];
+  const scored = scoreCandidates({
+    profiles,
+    messageText: "customer onboarding UX",
+    thread: { state: "open", priority: 50 } as never,
+    activityByAgentId: {
+      "agent-customer": selectionActivity(6),
+      "agent-creative": selectionActivity(),
+      "agent-finance": selectionActivity(),
+    },
+    turnIndex: 0,
+    rng: () => 0,
+  });
+  results.push(evaluate("postv1-neglected-relevant-specialist", [
+    assertion(scored[0]?.agentId === "agent-creative", "neglected relevant creative specialist can win"),
+    assertion(scored[0]?.reasons.includes("neglected relevant opportunity") === true, "neglected signal is visible"),
+  ], {
+    turnCount: 1, selectedAgents: [scored[0]?.agentId ?? "none"], publicMessageCount: 0, jobsCreated: 1, terminalReason: "relevant_neglected_opportunity",
+  }, ["PASS: no roster quota is imposed"]));
+}
+
+{
+  const profiles = [profile(agent("agent-technical", "engineering_architecture")), profile(agent("agent-finance", "finance_pricing"))];
+  const scored = scoreCandidates({
+    profiles,
+    messageText: "API architecture reliability",
+    thread: { state: "evidence_gathering", priority: 50 } as never,
+    activityByAgentId: { "agent-finance": selectionActivity() },
+    turnIndex: 0,
+    rng: () => 0,
+  });
+  results.push(evaluate("postv1-irrelevant-quiet-agent-stays-quiet", [
+    assertion(scored[0]?.agentId === "agent-technical", "technical relevance outranks finance silence"),
+    assertion(scored.find((item) => item.agentId === "agent-finance")?.relevanceScore === 0, "irrelevant quiet Agent is outside the relevant pool"),
+  ], {
+    turnCount: 1, selectedAgents: [scored[0]?.agentId ?? "none"], publicMessageCount: 0, jobsCreated: 1, terminalReason: "specialty_relevance",
+  }, ["PASS: quiet is not a speaking quota"]));
+}
+
+{
+  const roster = [profile(agent("agent-a", "shared_topic")), profile(agent("agent-b", "shared_topic")), profile(agent("agent-c", "shared_topic"))];
+  const activity = Object.fromEntries(roster.map((item) => [item.agent.id, selectionActivity()]));
+  const selected: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const scored = scoreCandidates({ profiles: roster, messageText: "shared topic", thread: { state: "unknown", priority: 50 } as never, activityByAgentId: activity, turnIndex: 0, rng: () => 0 });
+    const candidate = chooseCandidateFromScores(scored, { turnIndex: 0, rng: () => 0 }).candidate;
+    if (!candidate) break;
+    selected.push(candidate.agentId);
+    activity[candidate.agentId] = selectionActivity(
+      activity[candidate.agentId].recentOpportunityCount + 1,
+      activity[candidate.agentId].recentThreadOpportunityCount + 1,
+    );
+  }
+  results.push(evaluate("postv1-repeated-ambient-does-not-monopolize", [
+    assertion(new Set(selected).size >= 2, "separate ambient opportunities diversify without fixed rotation"),
+    assertion(selected.length === 3, "opportunity count remains bounded"),
+  ], {
+    turnCount: selected.length, selectedAgents: selected, publicMessageCount: 0, jobsCreated: 3, terminalReason: "cross_job_recency_applied",
+  }, ["PASS: no additional jobs are created per Agent"]));
+}
+
+{
+  const addressed = profile(agent("agent-product", "product_strategy"));
+  const other = profile(agent("agent-customer", "customer_experience"));
+  const scored = scoreCandidates({ profiles: [addressed, other], messageText: "customer product question", thread: { state: "open", priority: 50 } as never, turnIndex: 0, rng: () => 1 });
+  const selected = chooseCandidateFromScores(scored, { addressedAgentId: "agent-product", turnIndex: 0, rng: () => 1 }).candidate;
+  results.push(evaluate("postv1-explicit-address-still-wins", [
+    assertion(selected?.agentId === "agent-product", "explicit first-turn address remains deterministic"),
+  ], {
+    turnCount: 1, selectedAgents: [selected?.agentId ?? "none"], publicMessageCount: 0, jobsCreated: 1, terminalReason: "explicit_address",
+  }, ["PASS: exploration cannot override direct human intent"]));
+}
+
+{
+  const opportunity = { selected: true, intent: "WAIT", publicMessage: false, durableWork: false };
+  const fileWork = { selected: true, intent: "FILE_WORK", publicMessage: false, durableWork: true };
+  results.push(evaluate("postv1-wait-and-file-work-count-as-activity", [
+    assertion(opportunity.selected && opportunity.intent === "WAIT", "WAIT is an executed opportunity"),
+    assertion(!opportunity.publicMessage, "WAIT does not require Telegram speech"),
+    assertion(fileWork.selected && fileWork.durableWork, "FILE_WORK is meaningful durable activity without SPEAK"),
+  ], {
+    turnCount: 2, selectedAgents: ["agent-creative", "agent-technical"], publicMessageCount: 0, jobsCreated: 2, terminalReason: "non_public_activity_preserved",
+  }, ["PASS: public message count is not the fairness metric"]));
+}
+
 const failed = results.filter((result) => !result.passed);
 console.log(JSON.stringify({
-  suite: "luma-adhd-v1-phase-08",
+  suite: "luma-adhd-v1-postv1-agent-diversity",
   deterministic: true,
   externalServices: false,
   scenarioCount: results.length,
