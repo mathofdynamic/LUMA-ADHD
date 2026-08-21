@@ -250,12 +250,14 @@ export class ContextPackService {
       topK: Math.min(16, Math.max(1, topK * 2)),
       sourceKinds: ["document", "message", "thread_summary", "decision", "memory_note"],
     });
-    const official = await this.searchService.search(input.query, {
-      agentId: input.actor?.agentId,
-      threadId: input.threadId,
-      topK: Math.min(8, Math.max(1, topK)),
-      sourceKinds: ["knowledge_chunk"],
-    });
+    const official = queryIntent === "official_factual" || queryIntent === "mixed"
+      ? await this.searchService.search(input.query, {
+        agentId: input.actor?.agentId,
+        threadId: input.threadId,
+        topK: Math.min(8, Math.max(1, topK)),
+        sourceKinds: ["knowledge_chunk"],
+      })
+      : [];
     candidates.push(...retrieved, ...official);
     const deduped = [...new Map(candidates.map((item) => [`${item.type}:${item.sourceId}`, item])).values()]
       .sort((left, right) => right.score - left.score || right.updatedAt.localeCompare(left.updatedAt));
