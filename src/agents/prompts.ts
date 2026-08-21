@@ -180,7 +180,7 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     TELEGRAM_PRESENTATION_GUIDANCE,
     `\nOUTPUT SCHEMA\n${AGENT_STEP_SCHEMA}`,
     `Valid example:\n${actionExample()}`,
-    "Keep SPEAK content under 1200 Unicode characters, preferably one short paragraph or a few compact bullets, and keep reason_summary under 120 characters. If current evidence is insufficient, prefer WAIT or one concise qualification over a long speculative answer.",
+    "Keep SPEAK content under 600 Unicode characters, preferably one short paragraph or two compact bullets, and keep reason_summary under 80 characters. If current evidence is insufficient, prefer WAIT or one concise qualification over a long speculative answer.",
     "Use literal UTF-8 Persian or English text in string values. Do not emit \\uXXXX escapes.",
     "Return one complete JSON object without Markdown fences, prose, or chain-of-thought.",
     "reason_summary is a short audit-friendly rationale, not hidden reasoning. Do not include chain-of-thought.",

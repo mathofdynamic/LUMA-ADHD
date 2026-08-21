@@ -917,7 +917,7 @@ export class AgentRuntimeService {
             TELEGRAM_PRESENTATION_GUIDANCE,
             AGENT_STEP_SCHEMA,
             "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
-            "Keep SPEAK content under 1200 Unicode characters and reason_summary under 120 characters. Use null targets unless the intent requires one. If evidence is insufficient, return WAIT or one concise qualification.",
+            "Keep SPEAK content under 600 Unicode characters and reason_summary under 80 characters. Use null targets unless the intent requires one. If evidence is insufficient, return WAIT or one concise qualification.",
             "Do not add prose, Markdown fences, or hidden reasoning. Reply in the language of recent_context.",
           ].join("\n"),
           [{
