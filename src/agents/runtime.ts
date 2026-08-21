@@ -987,7 +987,9 @@ export class AgentRuntimeService {
       }
       if (step.kind !== "action") throw new AgentAcquisitionValidationError(["a final action is required after acquisition"]);
       if (step.action.intent === "SPEAK") {
-        grounding = assessOfficialGrounding(step.action.content ?? "", contextPack);
+        grounding = assessOfficialGrounding(step.action.content ?? "", contextPack, {
+          currentStateQuestion: context.conversationFocus.isCurrentStateQuestion,
+        });
         if (grounding.required && !grounding.satisfied) {
           if (repairAttempts >= 1) {
             throw new AgentActionValidationError(["SPEAK did not contain enough distinctive material from retrieved official LUMA knowledge"]);
@@ -1017,7 +1019,9 @@ export class AgentRuntimeService {
           if (step.kind !== "action" || step.action.intent !== "SPEAK") {
             throw new AgentActionValidationError(["grounding repair must return a final SPEAK action"]);
           }
-          grounding = assessOfficialGrounding(step.action.content ?? "", contextPack);
+          grounding = assessOfficialGrounding(step.action.content ?? "", contextPack, {
+            currentStateQuestion: context.conversationFocus.isCurrentStateQuestion,
+          });
           if (grounding.required && !grounding.satisfied) {
             throw new AgentActionValidationError(["grounding repair still did not use retrieved official LUMA knowledge"]);
           }
