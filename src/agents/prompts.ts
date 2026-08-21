@@ -5,7 +5,6 @@ import type {
   MessageRecord,
   ThreadRecord,
 } from "../database/types";
-import { AGENT_STEP_SCHEMA } from "./actions";
 import type { ContextPackTelemetry } from "../memory/types";
 import type { LLMMessage } from "../llm";
 import type { ConversationFocus } from "./conversation-focus";
@@ -69,6 +68,14 @@ const ROLE_PRINCIPLES: Readonly<Record<string, string>> = {
   "agent-operations": "Notice ownership, process, monitoring, repeatability, operational risk, and how an idea becomes reliable work.",
   "agent-heretic": "Notice unsupported assumptions, failure modes, opportunity cost, weak evidence, and second-order effects; challenge only when warranted.",
 };
+
+const WORK_OUTPUT_CONTRACT = [
+  "OUTPUT CONTRACT",
+  "Return exactly one JSON object and no prose outside JSON. The application and provider structured-output contract validate the complete shape.",
+  "Final action: {intent, content, confidence, reason_summary, target_agent_id, target_thread_id, metadata}. intent is one of SPEAK, WAIT, REQUEST_AGENT, REQUEST_HUMAN, PROPOSE_THREAD, REOPEN_THREAD, FILE_WORK, DRAW, or VOTE. content is required for SPEAK/PROPOSE_THREAD and otherwise null; targets are null unless the intent requires one; metadata is an object.",
+  "Acquisition: {step:\"ACQUIRE\", operation, query, logical_path, version_number, limit}. operation is SEARCH_MEMORY, SEARCH_DOCUMENTS, READ_DOCUMENT, READ_DOCUMENT_VERSION, or LIST_RELEVANT_FILES. It must be followed by a final action.",
+  "Do not add top-level fields. Keep SPEAK under 600 Unicode characters and reason_summary under 80 characters. Use literal UTF-8 Persian or English, not Unicode escapes. Do not include chain-of-thought.",
+].join("\n");
 
 export const TELEGRAM_PRESENTATION_GUIDANCE = [
   "Telegram presentation: SPEAK content is projected with parse_mode=HTML.",
@@ -217,10 +224,8 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
   ];
 
   const outputContract = [
-    "OUTPUT CONTRACT",
-    `Return exactly one validated JSON step and no prose outside JSON.\n${AGENT_STEP_SCHEMA}`,
+    WORK_OUTPUT_CONTRACT,
     "Valid shape example: {\"intent\":\"SPEAK\",\"content\":\"یک نکته کوتاه و مرتبط.\",\"confidence\":0.72,\"reason_summary\":\"یک نکته متمایز اضافه می‌کند.\",\"target_agent_id\":null,\"target_thread_id\":null,\"metadata\":{}}",
-    "Keep SPEAK under 600 Unicode characters and reason_summary under 80 characters. Use literal UTF-8 Persian or English, not Unicode escapes. Do not include chain-of-thought.",
   ];
   const socialOutputContract = [
     "OUTPUT CONTRACT",
