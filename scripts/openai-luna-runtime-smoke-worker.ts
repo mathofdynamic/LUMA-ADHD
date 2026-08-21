@@ -71,6 +71,12 @@ async function runSmoke(env: SmokeEnvironment, body: Record<string, unknown>) {
   if (normal.provider !== "openai") throw new Error("normal_provider_is_not_openai");
   const apiKey = resolveOpenAIKey(env);
   if (!apiKey) throw new Error("openai_key_not_configured");
+  const requestedMaxTurns = typeof body.maxTurns === "number" && Number.isFinite(body.maxTurns)
+    ? Math.min(4, Math.max(1, Math.floor(body.maxTurns)))
+    : 1;
+  const addressedAgentId = typeof body.addressedAgentId === "string" && body.addressedAgentId.trim().length > 0
+    ? body.addressedAgentId.trim().slice(0, 80)
+    : null;
   const repositories = createRepositories(env.DB);
   const provider = new OpenAIProvider({ apiKey, baseUrl: normal.baseUrl, model: normal.model, maxAttempts: 1 });
   const memory = createMemoryServices(repositories, { provider, modelKey: normal.model, reasoningEffort: normal.reasoningEffort });
@@ -82,7 +88,7 @@ async function runSmoke(env: SmokeEnvironment, body: Record<string, unknown>) {
     reasoningEffort: normal.reasoningEffort,
     memory,
     reputation,
-    runtimeSettings: { ...DEFAULT_RUNTIME_SETTINGS, interactiveBurstMaxTurns: 1 },
+    runtimeSettings: { ...DEFAULT_RUNTIME_SETTINGS, interactiveBurstMaxTurns: requestedMaxTurns },
   });
   const suffix = crypto.randomUUID();
   const threadId = `postv1-luna-provider-smoke-thread-${suffix}`;
@@ -111,7 +117,7 @@ async function runSmoke(env: SmokeEnvironment, body: Record<string, unknown>) {
   const job = await repositories.jobs.create({
     id: jobId,
     jobType: "telegram.interactive_message",
-    payload: { messageId, threadId, addressedAgentId: "agent-product" },
+    payload: { messageId, threadId, addressedAgentId },
     idempotencyKey: `postv1-luna-provider-smoke-job:${suffix}`,
     dueAt: new Date().toISOString(),
     maxAttempts: 1,
@@ -133,6 +139,8 @@ async function runSmoke(env: SmokeEnvironment, body: Record<string, unknown>) {
       provider: normal.provider,
       model: normal.model,
       reasoningEffort: normal.reasoningEffort,
+      maxTurns: requestedMaxTurns,
+      addressedAgentId,
       threadId,
       jobId,
       elapsedMs: Date.now() - startedAt,

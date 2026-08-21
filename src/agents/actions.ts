@@ -304,7 +304,7 @@ export const AGENT_STEP_JSON_SCHEMA: Readonly<Record<string, unknown>> = {
   properties: {
     step: { type: "string", enum: ["ACTION", "ACQUIRE"] },
     intent: { type: ["string", "null"] },
-    content: { type: ["string", "null"], maxLength: 4096 },
+    content: { type: ["string", "null"], maxLength: 1200 },
     confidence: { type: ["number", "null"] },
     reason_summary: { type: ["string", "null"], maxLength: 160 },
     target_agent_id: { type: ["string", "null"] },

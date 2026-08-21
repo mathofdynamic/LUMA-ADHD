@@ -1,5 +1,10 @@
 [CmdletBinding()]
-param()
+param(
+  [string]$Question = 'این یک تست محدود اپراتوری است؛ بدون ارسال تلگرام، یک پاسخ کوتاه و مستند درباره لوما بده.',
+  [ValidateRange(1, 4)]
+  [int]$MaxTurns = 1,
+  [string]$AddressedAgentId = ''
+)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -103,10 +108,14 @@ try {
   Install-TemporarySecret 'OPENAI_API_KEY' $gptKey
   $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, ($workerUrl + '/run'))
   $request.Headers.Add('X-Luma-Smoke-Secret', $smokeSecret)
-  $request.Content = [System.Net.Http.StringContent]::new('{"question":"این یک تست محدود اپراتوری است؛ با اطلاعات موجود، یک پاسخ کوتاه و مستند درباره لوما بده."}', [System.Text.Encoding]::UTF8, 'application/json')
+  $requestBody = @{ question = $Question; maxTurns = $MaxTurns; addressedAgentId = if ([string]::IsNullOrWhiteSpace($AddressedAgentId)) { $null } else { $AddressedAgentId } } | ConvertTo-Json -Compress
+  $request.Content = [System.Net.Http.StringContent]::new($requestBody, [System.Text.Encoding]::UTF8, 'application/json')
   $response = $http.SendAsync($request).Result
   $body = $response.Content.ReadAsStringAsync().Result
-  if (-not $response.IsSuccessStatusCode) { throw ('Luna runtime smoke failed with HTTP ' + [int]$response.StatusCode) }
+  if (-not $response.IsSuccessStatusCode) {
+    Write-Output ('LUNA_RUNTIME_SMOKE_FAILURE=' + $body)
+    throw ('Luna runtime smoke failed with HTTP ' + [int]$response.StatusCode)
+  }
   Write-Output ('LUNA_RUNTIME_SMOKE=' + $body)
 } finally {
   if ($deployed) { try { $null = Invoke-Wrangler @('delete', '--config', $configFile, '--name', $workerName, '--force'); Write-Output 'TEMPORARY_WORKER_DELETE=success' } catch { Write-Output 'TEMPORARY_WORKER_DELETE=failed' } }
