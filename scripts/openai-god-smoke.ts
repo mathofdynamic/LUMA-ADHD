@@ -11,7 +11,7 @@ if (apiKey.length === 0) {
       modelKey: VERIFIED_OPENAI_MODEL,
       systemPrompt: "Return one valid structured LUMA response representing WAIT.",
       messages: [{ role: "user", content: "Return WAIT." }],
-      reasoningEffort: "high",
+      reasoningEffort: "xhigh",
       maxOutputTokens: 800,
       structuredOutput: {
         name: "luma_wait_smoke",

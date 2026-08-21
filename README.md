@@ -2,7 +2,7 @@
 
 LUMA ADHD is a persistent multi-agent workspace for thinking about LUMA as a company, product, platform, and business. v1 is built around a Cloudflare Free-compatible core: Workers, D1, Cron Triggers, one coarse Queue, and Worker Static Assets.
 
-v1 is complete through Phase 08. It includes eight normal Agents, GOD as a distinct supervisory model, gateway-only Telegram ingress with persona outbound identities, D1-backed memory/files/RAG, domain reputation, Human Tasks, source-first diagrams, and a private Admin Observatory. Phase 08 hardens failure handling, idempotency, loop limits, deterministic evaluations, security review, CI, deployment, and operations.
+v1 is complete through Phase 08. It includes eight normal Agents, GOD as a distinct supervisory model, gateway-only Telegram ingress with persona outbound identities, D1-backed memory/files/RAG, domain reputation, Human Tasks, source-first diagrams, and a private Admin Observatory. Phase 08 hardens failure handling, idempotency, loop limits, deterministic evaluations, security review, CI, deployment, and operations. The current post-v1 provider contract runs all normal Agents on OpenAI `gpt-5.6-luna` with `medium` reasoning and GOD on the same model with `xhigh` reasoning; Nebula remains a supported fallback but is inactive in production.
 
 ## Local setup
 
@@ -41,6 +41,7 @@ npm run dev
 | `npm run migrations:local` | Apply local D1 migrations |
 | `npm run eval` | Run the deterministic, credential-free v1 behavioral eval suite |
 | `npm run verify` | Run local migrations, generated-type checks, tests, evals, builds, and startup validation |
+| `npm run openai:luna:smoke` | Operator-only non-persistent OpenAI Luna structured-output smoke; requires `GPT_API_KEY` and never prints it |
 
 ## Phase workflow
 

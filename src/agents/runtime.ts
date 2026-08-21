@@ -14,6 +14,7 @@ import {
   AgentActionValidationError,
   AgentAcquisitionValidationError,
   AGENT_STEP_SCHEMA,
+  AGENT_STEP_JSON_SCHEMA,
   parseAgentStep,
   type AgentAction,
   type AgentAcquisitionRequest,
@@ -33,6 +34,7 @@ import {
   normalizeProviderError,
   type LLMGenerateResponse,
   type LLMProvider,
+  type LLMReasoningEffort,
 } from "../llm";
 import type { TelegramApplicationService } from "../telegram";
 import { ContextPackService } from "../memory/retrieval";
@@ -54,6 +56,7 @@ export interface AgentRuntimeDependencies {
   readonly provider: LLMProvider;
   readonly telegram?: Pick<TelegramApplicationService, "projectAgentMessage">;
   readonly modelKey: string;
+  readonly reasoningEffort?: LLMReasoningEffort;
   readonly memory?: MemoryServices;
   readonly reputation?: ReputationService;
   readonly runtimeSettings?: EffectiveRuntimeSettings;
@@ -282,7 +285,7 @@ export class AgentRuntimeService {
   async runDeepWork(job: JobRecord, threadId: string, trigger: string): Promise<RuntimeBurstResult> {
     const settings = await this.runtimeSettings;
     const dailyDeepWorkJobs = await countDailyAutonomyJobs(this.dependencies.repositories.database, "deep_work", this.now());
-    if (dailyDeepWorkJobs > settings.deepWorkDailyJobBudget) {
+    if (dailyDeepWorkJobs >= settings.deepWorkDailyJobBudget) {
       const nextDueAt = nextUtcDay(this.now());
       const deferredJob = await this.dependencies.repositories.jobs.create({
         jobType: job.jobType,
@@ -863,6 +866,16 @@ export class AgentRuntimeService {
           messages,
           temperature: 0,
           maxOutputTokens,
+          reasoningEffort: this.dependencies.reasoningEffort,
+          ...(this.dependencies.provider.name === "openai"
+            ? {
+              structuredOutput: {
+                name: "luma_agent_step",
+                description: "A bounded LUMA ADHD normal-Agent action or acquisition step.",
+                schema: AGENT_STEP_JSON_SCHEMA,
+              },
+            }
+            : {}),
           timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
           metadata: Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])),
         });
@@ -1538,7 +1551,10 @@ export class AgentRuntimeService {
       durationMs,
       errorSummary: failure ? safeErrorSummary(failure) : undefined,
       idempotencyKey,
-      metadata: response?.metadata ? { ...response.metadata } : {},
+      metadata: {
+        ...(response?.metadata ? { ...response.metadata } : {}),
+        ...(response?.usage?.reasoningTokens === undefined ? {} : { reasoningTokens: String(response.usage.reasoningTokens) }),
+      },
     }).catch((error: unknown) => {
       if (!(error instanceof NotFoundError)) throw error;
     });

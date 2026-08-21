@@ -118,8 +118,8 @@ try {
     "NEBULA_MODEL": "auto",
     "GOD_PROVIDER": "openai",
     "GOD_BASE_URL": "https://api.openai.com/v1",
-    "GOD_MODEL": "gpt-5.6-sol",
-    "GOD_REASONING_EFFORT": "high"
+    "GOD_MODEL": "gpt-5.6-luna",
+    "GOD_REASONING_EFFORT": "xhigh"
   },
   "d1_databases": [
     {

@@ -42,6 +42,6 @@ The review output is strict JSON, with at most one repair attempt. Failed valida
 
 ## OpenAI provider
 
-The provider-neutral GOD service uses the verified OpenAI Responses adapter. Runtime configuration is `GOD_PROVIDER=openai`, `GOD_BASE_URL=https://api.openai.com/v1`, `GOD_MODEL=gpt-5.6-sol`, and `GOD_REASONING_EFFORT=high`; the credential is only `GOD_API_KEY`. Responses use `store=false`, strict JSON Schema output, bounded retries, and status/usage/request-ID normalization. The application never reads the operator-only `GPT_API_KEY` name.
+The provider-neutral GOD service uses the verified OpenAI Responses adapter. Runtime configuration is `GOD_PROVIDER=openai`, `GOD_BASE_URL=https://api.openai.com/v1`, `GOD_MODEL=gpt-5.6-luna`, and `GOD_REASONING_EFFORT=xhigh`; the preferred shared credential is `OPENAI_API_KEY`, with `GOD_API_KEY` retained as a compatibility fallback during migration. Responses use `store=false`, strict JSON Schema output, bounded retries, and status/usage/request-ID normalization. The application never reads the operator-only `GPT_API_KEY` name. Normal Agents use OpenAI Luna with `medium` effort; Nebula remains a supported fallback but is inactive in production.
 
 Automated tests use `FakeProvider` and never call GOD, Nebula, Telegram, or external knowledge URLs.

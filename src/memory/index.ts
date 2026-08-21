@@ -3,7 +3,7 @@ import { DocumentService } from "./document-service";
 import { ContextPackService, InstitutionalMemorySearch } from "./retrieval";
 import { KnowledgeSyncService } from "../knowledge/sync";
 import { ThreadSummaryService } from "./summary";
-import type { LLMProvider } from "../llm";
+import type { LLMProvider, LLMReasoningEffort } from "../llm";
 import type { MemoryRecord } from "./legacy-types";
 
 export type { MemoryActor, ContextPack, ContextPackItem, ContextPackTelemetry, MemoryItemType } from "./types";
@@ -25,7 +25,7 @@ export interface MemoryServices {
 
 export function createMemoryServices(
   repositories: ReturnType<typeof createRepositories>,
-  options?: { readonly provider?: LLMProvider; readonly modelKey?: string },
+  options?: { readonly provider?: LLMProvider; readonly modelKey?: string; readonly reasoningEffort?: LLMReasoningEffort },
 ): MemoryServices {
   return {
     documents: new DocumentService(repositories),

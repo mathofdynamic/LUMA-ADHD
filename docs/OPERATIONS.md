@@ -16,7 +16,7 @@ To reduce autonomous activity without losing inbound work:
 
 ## Provider failures
 
-Nebula and OpenAI/GOD are separate roles. A timeout/rate limit is retryable and appears in Jobs/Providers; an authentication, configuration, unsupported-model, or malformed-output failure is not silently retried indefinitely. Verify endpoint/model/secret configuration, rotate only through Wrangler, then run the relevant bounded smoke. A failed structured response is a safe failed turn/review, not permission to bypass validation.
+Normal Agents and GOD now use the shared OpenAI Luna transport with separate reasoning policies: normal Agents use `medium`; GOD uses `xhigh`. Nebula remains implemented as a selectable fallback and is inactive in the current production configuration. A timeout/rate limit is retryable and appears in Jobs/Providers; an authentication, configuration, unsupported-model, or malformed-output failure is not silently retried indefinitely. Verify endpoint/model/secret configuration, rotate only through Wrangler, then run `npm run openai:luna:smoke` or the relevant bounded runtime smoke. The Worker prefers `OPENAI_API_KEY` and temporarily accepts `GOD_API_KEY` as a compatibility fallback. Never expose either value; `GPT_API_KEY` is only an operator-process name. A failed structured response is a safe failed turn/review, not permission to bypass validation.
 
 ## Telegram failures
 

@@ -9,6 +9,7 @@ export interface LLMUsage {
   readonly promptTokens?: number;
   readonly completionTokens?: number;
   readonly totalTokens?: number;
+  readonly reasoningTokens?: number;
 }
 
 export type LLMReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";

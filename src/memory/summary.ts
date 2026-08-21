@@ -1,6 +1,6 @@
 import type { createRepositories } from "../database/repositories";
 import { ValidationError } from "../database/errors";
-import type { LLMProvider } from "../llm";
+import type { LLMProvider, LLMReasoningEffort } from "../llm";
 import { ThreadSummaryRepository } from "./repositories";
 
 type Repositories = ReturnType<typeof createRepositories>;
@@ -36,6 +36,7 @@ function readSummary(text: string): string | null {
 export interface ThreadSummaryServiceOptions {
   readonly provider?: LLMProvider;
   readonly modelKey?: string;
+  readonly reasoningEffort?: LLMReasoningEffort;
   readonly minimumNewMessages?: number;
 }
 
@@ -78,6 +79,7 @@ export class ThreadSummaryService {
           }],
           temperature: 0,
           maxOutputTokens: 700,
+          reasoningEffort: this.options.reasoningEffort,
           timeoutMs: 28_000,
           metadata: { purpose: "thread_summary", threadId: input.threadId },
         });
@@ -89,7 +91,11 @@ export class ThreadSummaryService {
           promptTokens: response.usage?.promptTokens, completionTokens: response.usage?.completionTokens,
           totalTokens: response.usage?.totalTokens, durationMs: response.latencyMs,
           idempotencyKey: `summary-provider:${input.threadId}:${messageCount}`,
-          metadata: { purpose: "thread_summary" },
+          metadata: {
+            purpose: "thread_summary",
+            ...(response.metadata ?? {}),
+            ...(response.usage?.reasoningTokens === undefined ? {} : { reasoningTokens: String(response.usage.reasoningTokens) }),
+          },
         });
       } catch {
         summaryMarkdown = null;

@@ -27,13 +27,18 @@ TELEGRAM_HERETIC_BOT_TOKEN=
 # local FakeProvider tests.
 NEBULA_API_KEY=
 NEBULA_BASE_URL=https://nebula-free-llm.nebula-ai-company.workers.dev/v1
+NORMAL_AGENT_PROVIDER=openai
+NORMAL_AGENT_BASE_URL=https://api.openai.com/v1
+NORMAL_AGENT_MODEL=gpt-5.6-luna
+NORMAL_AGENT_REASONING_EFFORT=medium
 NEBULA_MODEL=auto
+OPENAI_API_KEY=
 
 GOD_API_KEY=
 GOD_PROVIDER=openai
 GOD_BASE_URL=https://api.openai.com/v1
-GOD_MODEL=gpt-5.6-sol
-GOD_REASONING_EFFORT=high
+GOD_MODEL=gpt-5.6-luna
+GOD_REASONING_EFFORT=xhigh
 
 # Admin authentication. Use a high-entropy local-only value for local admin tests.
 ADMIN_AUTH_SECRET=

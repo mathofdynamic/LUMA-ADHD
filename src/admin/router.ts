@@ -12,6 +12,7 @@ import type { JsonObject } from "../database/validation";
 import { createRepositories } from "../database/repositories";
 import { createTelegramApplication, parseTelegramConfig, TelegramBotApiTransport } from "../telegram";
 import type { TelegramRuntimeEnv } from "../telegram/webhook";
+import { resolveNormalAgentConfig, resolveOpenAIKey } from "../agents/factory";
 
 export interface AdminApiEnvironment extends Partial<Omit<TelegramRuntimeEnv, "DB">> {
   readonly DB?: D1Database;
@@ -20,6 +21,11 @@ export interface AdminApiEnvironment extends Partial<Omit<TelegramRuntimeEnv, "D
   readonly ADMIN_SESSION_TTL_SECONDS?: string;
   readonly LUMA_ENVIRONMENT?: string;
   readonly LUMA_PHASE?: string;
+  readonly OPENAI_API_KEY?: string;
+  readonly NORMAL_AGENT_PROVIDER?: string;
+  readonly NORMAL_AGENT_BASE_URL?: string;
+  readonly NORMAL_AGENT_MODEL?: string;
+  readonly NORMAL_AGENT_REASONING_EFFORT?: string;
   readonly GOD_PROVIDER?: string;
   readonly GOD_API_KEY?: string;
   readonly GOD_MODEL?: string;
@@ -163,6 +169,8 @@ async function requireAuthenticated(
       telegramApplication = undefined;
     }
   }
+  const normalConfig = resolveNormalAgentConfig({ ...environment, DB: environment.DB });
+  const normalOpenAIConfigured = normalConfig.provider === "openai" && resolveOpenAIKey(environment) !== undefined;
   return {
     auth,
     session,
@@ -170,10 +178,15 @@ async function requireAuthenticated(
       godProvider: environment.GOD_PROVIDER,
       godModel: environment.GOD_MODEL,
       godReasoningEffort: environment.GOD_REASONING_EFFORT,
-      godConfigured: Boolean(environment.GOD_PROVIDER && environment.GOD_MODEL && environment.GOD_API_KEY),
+      godConfigured: Boolean(environment.GOD_PROVIDER && environment.GOD_MODEL && resolveOpenAIKey(environment)),
+      normalProvider: normalConfig.provider,
+      normalModel: normalConfig.model,
+      normalReasoningEffort: normalConfig.reasoningEffort,
+      normalConfigured: normalConfig.configured,
       nebulaModel: environment.NEBULA_MODEL,
       telegramConfigured: Boolean(environment.TELEGRAM_GATEWAY_BOT_TOKEN && environment.TELEGRAM_GROUP_ID),
       nebulaConfigured: Boolean(environment.NEBULA_API_KEY && environment.NEBULA_MODEL),
+      openaiConfigured: normalOpenAIConfigured || Boolean(environment.GOD_PROVIDER && environment.GOD_MODEL && resolveOpenAIKey(environment)),
       adminConfigured: Boolean(environment.ADMIN_AUTH_SECRET),
       telegramGroupId: environment.TELEGRAM_GROUP_ID,
       telegramApplication,

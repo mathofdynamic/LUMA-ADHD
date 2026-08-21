@@ -303,7 +303,11 @@ export class GodReviewService {
       durationMs,
       errorSummary: failure ? safeFailure(failure) : undefined,
       idempotencyKey: key,
-      metadata: { role: "god" },
+      metadata: {
+        role: "god",
+        ...(response?.metadata ?? {}),
+        ...(response?.usage?.reasoningTokens === undefined ? {} : { reasoningTokens: String(response.usage.reasoningTokens) }),
+      },
     });
   }
 }
