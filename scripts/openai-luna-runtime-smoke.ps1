@@ -88,7 +88,6 @@ try {
   $null = Invoke-Wrangler @('deploy', '--config', $configFile, '--name', $workerName)
   $deployed = $true
   $workerUrl = 'https://' + $workerName + '.mathofdynamic.workers.dev'
-  Install-TemporarySecret 'OPENAI_API_KEY' $gptKey
   Add-Type -AssemblyName System.Net.Http
   $http = [System.Net.Http.HttpClient]::new()
   $http.Timeout = [TimeSpan]::FromMinutes(4)
@@ -101,6 +100,7 @@ try {
     Start-Sleep -Milliseconds 500
   }
   if (-not $ready) { throw 'Temporary Luna smoke Worker did not become ready' }
+  Install-TemporarySecret 'OPENAI_API_KEY' $gptKey
   $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, ($workerUrl + '/run'))
   $request.Headers.Add('X-Luma-Smoke-Secret', $smokeSecret)
   $request.Content = [System.Net.Http.StringContent]::new('{"question":"این یک تست محدود اپراتوری است؛ با اطلاعات موجود، یک پاسخ کوتاه و مستند درباره لوما بده."}', [System.Text.Encoding]::UTF8, 'application/json')

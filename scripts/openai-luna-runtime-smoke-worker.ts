@@ -5,6 +5,7 @@ import { createRepositories } from "../src/database/repositories";
 import { resolveNormalAgentConfig, resolveOpenAIKey, type AgentRuntimeEnvironment } from "../src/agents/factory";
 import { OpenAIProvider } from "../src/llm";
 import { ReputationService } from "../src/reputation/service";
+import { DEFAULT_RUNTIME_SETTINGS } from "../src/admin/settings";
 
 interface SmokeEnvironment extends AgentRuntimeEnvironment {
   readonly SMOKE_SECRET: string;
@@ -81,6 +82,7 @@ async function runSmoke(env: SmokeEnvironment, body: Record<string, unknown>) {
     reasoningEffort: normal.reasoningEffort,
     memory,
     reputation,
+    runtimeSettings: { ...DEFAULT_RUNTIME_SETTINGS, interactiveBurstMaxTurns: 1 },
   });
   const suffix = crypto.randomUUID();
   const threadId = `postv1-luna-provider-smoke-thread-${suffix}`;
@@ -109,7 +111,7 @@ async function runSmoke(env: SmokeEnvironment, body: Record<string, unknown>) {
   const job = await repositories.jobs.create({
     id: jobId,
     jobType: "telegram.interactive_message",
-    payload: { messageId, threadId },
+    payload: { messageId, threadId, addressedAgentId: "agent-product" },
     idempotencyKey: `postv1-luna-provider-smoke-job:${suffix}`,
     dueAt: new Date().toISOString(),
     maxAttempts: 1,
