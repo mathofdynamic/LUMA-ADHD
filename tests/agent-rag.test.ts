@@ -72,6 +72,7 @@ describe("Phase 05 persistent Agent RAG", () => {
   it("classifies LUMA factual questions and reserves official knowledge in a bounded pack", async () => {
     const officialBody = await syncOfficialFixture();
     expect(classifyRetrievalIntent("لوما چی هست و چه قابلیت‌هایی دارد؟")).toBe("official_factual");
+    expect(classifyRetrievalIntent("کیان، مشکل latency این معماری backend چیه؟")).toBe("workspace");
     const user = await repositories.users.create({ id: testId("rag-pack-user"), displayName: "Pack Human" });
     const thread = await repositories.threads.create({ id: testId("rag-pack-thread"), title: "LUMA facts", createdByUserId: user.id });
     const noisyMessages = await Promise.all(Array.from({ length: 4 }, (_, index) => repositories.messages.create({
@@ -87,6 +88,12 @@ describe("Phase 05 persistent Agent RAG", () => {
     expect(pack.items.some((item) => item.type === "knowledge_chunk" && item.excerpt.includes("لوما"))).toBe(true);
     expect(ContextPackService.toPromptText(pack)).toContain(officialBody.slice(0, 40));
     expect(pack.totalCharacters).toBeLessThanOrEqual(1_800);
+    const technicalPack = await new ContextPackService(repositories.database).build({
+      query: "کیان، مشکل latency این معماری backend چیه؟",
+      actor: { agentId: "agent-technical" }, threadId: thread.id, topK: 6, maxCharacters: 1_800,
+    });
+    expect(technicalPack.telemetry.queryIntent).toBe("workspace");
+    expect(technicalPack.telemetry.officialKnowledgeCount).toBe(0);
   });
 
   it("gives multiple Agents the same official facts while preserving workspace and specialty context", async () => {

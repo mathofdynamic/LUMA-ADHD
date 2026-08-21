@@ -1,5 +1,5 @@
 import { FOUNDATION_GUARDRAILS } from "../src/guardrails";
-import { assessContributionDuplication, assessCurrentStateGrounding, buildConversationFocus, isObviousRepeatedContent, qualifyUnsupportedCurrentClaim } from "../src/agents";
+import { AGENT_PROMPT_VERSION, TELEGRAM_PRESENTATION_GUIDANCE, assessContributionDuplication, assessCurrentStateGrounding, buildAgentPrompt, buildConversationFocus, classifyConversationIntent, decideThreadContinuation, isObviousRepeatedContent, qualifyUnsupportedCurrentClaim } from "../src/agents";
 import { chooseCandidateFromScores, scoreCandidates } from "../src/agents/selection";
 
 interface EvalResult {
@@ -89,6 +89,72 @@ const results: EvalResult[] = [];
     `PASS: hard interactive cap <= ${FOUNDATION_GUARDRAILS.interactiveBurstMaxTurns}`,
     "PASS: not all roster members are forced to speak",
   ]));
+}
+
+{
+  const prompt = buildAgentPrompt({
+    agent: agent("agent-operations", "operations", 10),
+    specialties: [{ domain: "operations", description: "execution and repeatability", priority: 1, isPrimary: true }],
+    interests: [],
+    thread: { id: "prompt-thread", title: "Prompt diagnostic", state: "open", priority: 50, summary: null } as never,
+    wakeReason: "human_message",
+    mode: "interactive",
+    recentMessages: [],
+  });
+  results.push(evaluate("postv1-organizational-self-model", [
+    assertion(prompt.systemPrompt.startsWith("ORGANIZATIONAL CONSTITUTION"), "identity precedes action syntax"),
+    assertion(prompt.systemPrompt.includes("canonical Agent ID agent-operations"), "Agent identity is explicit"),
+    assertion(prompt.systemPrompt.includes("GOD / agent-god"), "supervisory relationship is explicit"),
+    assertion(prompt.systemPrompt.includes(AGENT_PROMPT_VERSION), "prompt contract version is stable"),
+    assertion(!TELEGRAM_PRESENTATION_GUIDANCE.includes("Activation Rate"), "format guidance is content-neutral"),
+  ], {
+    turnCount: 1,
+    selectedAgents: ["agent-operations"],
+    publicMessageCount: 0,
+    jobsCreated: 0,
+    terminalReason: "prompt_contract_rendered",
+  }, ["PASS: no private reasoning or secret material is included"]));
+}
+
+{
+  const oldHuman = { id: "old", threadId: "thread", authorType: "human", authorUserId: "human", authorAgentId: null, contentText: "تحلیل قدیمی محصول", createdAt: "2026-08-17T05:00:00.000Z", replyToMessageId: null } as never;
+  const oldAgent = { id: "old-agent", threadId: "thread", authorType: "agent", authorUserId: null, authorAgentId: "agent-product", contentText: "تحلیل strategic قدیمی", createdAt: "2026-08-17T05:01:00.000Z", replyToMessageId: null } as never;
+  const greeting = { id: "greeting", threadId: "thread", authorType: "human", authorUserId: "human", authorAgentId: null, contentText: "سلام", createdAt: "2026-08-21T05:00:00.000Z", replyToMessageId: null } as never;
+  const focus = buildConversationFocus({ thread: { title: "Old strategy", summary: "old strategy" } as never, wakeMessage: greeting, recentMessages: [oldHuman, oldAgent, greeting] });
+  const intent = classifyConversationIntent("سلام");
+  results.push(evaluate("postv1-social-boundary-no-rag", [
+    assertion(intent.interactionIntent === "social", "greeting has social intent"),
+    assertion(focus.primaryQuery === "سلام", "current greeting is primary focus"),
+    assertion(focus.retrievalQuery === "", "social path skips retrieval"),
+    assertion(focus.recentDevelopment === null, "old Agent development is excluded"),
+    assertion(!focus.isBroadQuestion, "greeting is not broad work"),
+  ], {
+    turnCount: 1,
+    selectedAgents: ["agent-operations"],
+    publicMessageCount: 1,
+    jobsCreated: 1,
+    terminalReason: "social_fast_path",
+  }, ["PASS: at most one short response is allowed"]));
+}
+
+{
+  const decision = decideThreadContinuation({
+    candidateThread: { id: "old-thread", lastActivityAt: "2026-08-21T05:00:00.000Z" } as never,
+    recentMessages: [],
+    text: "گفتم سلام فقط",
+    now: "2026-08-21T05:01:00.000Z",
+  });
+  results.push(evaluate("postv1-correction-supersedes-stale-work", [
+    assertion(decision.classification.interactionIntent === "correction", "correction intent is deterministic"),
+    assertion(decision.classification.supersedesStaleWork, "correction supersedes stale work"),
+    assertion(decision.continueThread, "recent thread remains available for corrective acknowledgement"),
+  ], {
+    turnCount: 1,
+    selectedAgents: ["agent-operations"],
+    publicMessageCount: 1,
+    jobsCreated: 1,
+    terminalReason: "stale_work_superseded",
+  }, ["PASS: already-published history is preserved"]));
 }
 
 {

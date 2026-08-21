@@ -237,6 +237,24 @@ export class MessageRepository {
     return result.results.map(mapMessage);
   }
 
+  async listRecentByChat(chatId: string, limit = 50): Promise<readonly MessageRecord[]> {
+    const safeLimit = requireLimit(limit, "chat message list limit", 200);
+    const result = await this.database
+      .prepare(
+        `SELECT * FROM (
+           SELECT * FROM messages
+           WHERE chat_id = ? AND deleted_at IS NULL
+           ORDER BY created_at DESC, id DESC
+           LIMIT ?
+         ) recent
+         ORDER BY created_at ASC, id ASC`,
+      )
+      .bind(chatId, safeLimit)
+      .all<MessageRow>();
+
+    return result.results.map(mapMessage);
+  }
+
   async countByThread(threadId: string): Promise<number> {
     const row = await this.database
       .prepare("SELECT COUNT(*) AS count FROM messages WHERE thread_id = ? AND deleted_at IS NULL")

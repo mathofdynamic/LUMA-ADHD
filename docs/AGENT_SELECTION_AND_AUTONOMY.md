@@ -36,6 +36,14 @@ latest meaningful contribution, and the unresolved question. A reply such as
 "کسی نیست جواب منو بده؟" therefore retains the preceding question instead of
 becoming the retrieval query. Focus is rebuilt after each completed turn.
 
+Conversation boundaries are deterministic. Greetings and acknowledgements use
+a one-turn social fast path; corrections and topic resets supersede stale
+interactive work. Direct Telegram replies and topic bindings continue their
+target thread, while an ambiguous message after a temporal gap does not blindly
+reuse the most recent active strategy thread. The runtime checks for a newer
+superseding human boundary before selection, after the provider response, and
+before Telegram projection.
+
 For broad cross-functional questions, selection tracks covered domains such as
 `product_strategy`, `customer_experience`, `engineering_architecture`, and
 `finance_pricing`. An uncovered relevant perspective gets a small bonus and an

@@ -21,7 +21,7 @@ export interface CandidateSelectionInput {
   readonly now?: string;
   readonly explorationRate?: number;
   readonly rng?: () => number;
-  readonly mode?: "interactive" | "ambient" | "deep_work";
+  readonly mode?: "interactive" | "social" | "ambient" | "deep_work";
   readonly isBroadQuestion?: boolean;
   readonly coveredDomains?: readonly string[];
   readonly contributionRole?: "CONTRIBUTE" | "SYNTHESIZE";
@@ -147,6 +147,7 @@ function isRelevantCandidate(
   broadQuestion: boolean,
 ): boolean {
   if (addressed || requested || lexicalScore > 0) return true;
+  if (mode === "social") return true;
   // Ambient work may use a thread's lifecycle phase as a bounded opportunity
   // signal. Interactive human routing must instead answer the actual query;
   // phase alone is not enough unless the question is explicitly broad.
@@ -197,7 +198,7 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
         if (relevanceStabilityBonus > 0) reasons.push("relevance stability bonus");
       }
       const phaseFit = profile.specialties.some((item) => phaseDomains.includes(normalizeReputationDomain(item.domain)));
-      if (phaseFit) {
+      if (phaseFit && mode !== "social") {
         // Phase fit is useful relevance evidence, but must not become a
         // deterministic winner for broad states such as open/exploring.
         score += mode === "interactive" ? 10 : 6;
@@ -267,7 +268,9 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
       reasons.push("candidate-specific exploration");
 
       const phaseEligible = mode !== "interactive" || broadQuestion;
-      const relevanceScore = relevance
+      const relevanceScore = mode === "social"
+        ? 1 + (requestedByAgent ? 24 : 0) + (addressed ? 60 : 0)
+        : relevance
         + (phaseFit && phaseEligible ? mode === "interactive" ? 10 : 6 : 0)
         + (requestedByAgent ? 24 : 0)
         + (addressed ? 60 : 0)
@@ -315,6 +318,16 @@ export function chooseCandidateFromScores(
   }
 
   const lexicalEligible = scored.filter((candidate) => candidate.signals.lexicalRelevance > 0);
+  if (input.mode === "social") {
+    const pool = scored.slice(0, 3);
+    const candidate = pool[0] ?? null;
+    return {
+      candidate,
+      usedExploration: false,
+      explorationPool: pool.map((item) => item.agentId),
+      reason: candidate ? "social_fast_path" : "no_social_candidate",
+    };
+  }
   const eligible = input.mode === "ambient" && lexicalEligible.length > 0
     ? lexicalEligible
     : scored.filter((candidate) => candidate.relevanceScore > 0);

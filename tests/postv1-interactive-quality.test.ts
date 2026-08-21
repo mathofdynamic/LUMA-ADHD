@@ -4,9 +4,14 @@ import {
   assessOfficialGrounding,
   assessCurrentStateGrounding,
   buildConversationFocus,
+  buildAgentPrompt,
+  classifyConversationIntent,
+  decideThreadContinuation,
   chooseCandidateFromScores,
   qualifyUnsupportedCurrentClaim,
   scoreCandidates,
+  TELEGRAM_PRESENTATION_GUIDANCE,
+  AGENT_PROMPT_VERSION,
   type AgentCandidateProfile,
   type AgentSelectionActivity,
 } from "../src/agents";
@@ -278,5 +283,105 @@ describe("post-v1 interactive discussion quality", () => {
     });
     expect(scored[0]?.agentId).toBe("agent-customer");
     expect(scored.find((candidate) => candidate.agentId === "agent-product")?.reasons).toContain("cross-job thread recency penalty");
+  });
+
+  it("classifies social, acknowledgement, correction, and mixed substantive messages", () => {
+    expect(classifyConversationIntent("سلام").interactionIntent).toBe("social");
+    expect(classifyConversationIntent("ممنون").interactionIntent).toBe("acknowledgement");
+    expect(classifyConversationIntent("گفتم سلام فقط").interactionIntent).toBe("correction");
+    expect(classifyConversationIntent("سلام، مدل قیمت‌گذاری رو بررسی کنید").interactionIntent).toBe("substantive");
+  });
+
+  it("starts a fresh social boundary without importing old strategic development", () => {
+    const oldHuman = message({ id: "old-human", authorType: "human", createdAt: "2026-08-17T05:00:00.000Z", contentText: "وضعیت فعلی محصول را بررسی کنید" });
+    const oldAgent = message({ id: "old-agent", authorType: "agent", authorAgentId: "agent-product", createdAt: "2026-08-17T05:01:00.000Z", contentText: "تحلیل قدیمی و طولانی درباره محصول" });
+    const greeting = message({ id: "greeting", authorType: "human", createdAt: "2026-08-21T07:46:35.000Z", contentText: "سلام" });
+    const focus = buildConversationFocus({
+      thread: { ...thread(), summary: "قدیمی: تحلیل استراتژیک" },
+      wakeMessage: greeting,
+      recentMessages: [oldHuman, oldAgent, greeting],
+    });
+    expect(focus.interactionIntent).toBe("social");
+    expect(focus.primaryQuery).toBe("سلام");
+    expect(focus.recentDevelopment).toBeNull();
+    expect(focus.retrievalQuery).toBe("");
+    expect(focus.isBroadQuestion).toBe(false);
+    expect(focus.isCurrentStateQuestion).toBe(false);
+  });
+
+  it("uses explicit reply continuity but refuses an old ambiguous strategic thread", () => {
+    const old = { ...thread(), lastActivityAt: "2026-08-17T05:00:00.000Z" } as ThreadRecord;
+    const oldQuestion = message({ id: "old-question", authorType: "human", createdAt: "2026-08-17T04:59:00.000Z", contentText: "مدل قیمت گذاری را بررسی کنید" });
+    const directReply = decideThreadContinuation({
+      candidateThread: old,
+      recentMessages: [oldQuestion],
+      text: "این بخش را بیشتر توضیح بده",
+      now: "2026-08-21T07:46:00.000Z",
+      hasDirectReply: true,
+    });
+    const greeting = decideThreadContinuation({
+      candidateThread: old,
+      recentMessages: [oldQuestion],
+      text: "سلام",
+      now: "2026-08-21T07:46:00.000Z",
+    });
+    expect(directReply.continueThread).toBe(true);
+    expect(directReply.reason).toBe("explicit_telegram_reply");
+    expect(greeting.continueThread).toBe(false);
+    expect(greeting.classification.interactionIntent).toBe("social");
+  });
+
+  it("keeps the identity model ahead of the action contract and makes social prompts small", () => {
+    const product = profile("agent-product", "product_strategy", "product value and prioritization");
+    const workFocus = buildConversationFocus({ thread: thread(), wakeMessage: null, recentMessages: [] });
+    const work = buildAgentPrompt({
+      agent: product.agent,
+      specialties: product.specialties,
+      interests: product.interests,
+      thread: thread(),
+      wakeReason: "human_message",
+      mode: "interactive",
+      conversationFocus: workFocus,
+      participants: [{ id: product.agent.id, displayName: product.agent.displayName, kind: "agent" }],
+    });
+    const greeting = message({ id: "prompt-greeting", authorType: "human", createdAt: "2026-08-21T07:46:35.000Z", contentText: "سلام" });
+    const socialFocus = buildConversationFocus({ thread: thread(), wakeMessage: greeting, recentMessages: [greeting] });
+    const social = buildAgentPrompt({
+      agent: product.agent,
+      specialties: product.specialties,
+      interests: product.interests,
+      thread: thread(),
+      wakeReason: "human_message",
+      mode: "social",
+      conversationFocus: socialFocus,
+      recentMessages: [greeting],
+    });
+    expect(work.systemPrompt.startsWith("ORGANIZATIONAL CONSTITUTION")).toBe(true);
+    expect(work.systemPrompt).toContain("You are agent-product");
+    expect(work.systemPrompt).toContain("GOD / agent-god");
+    expect(work.systemPrompt).toContain("current intent outranks old context");
+    expect(work.systemPrompt).toContain("OUTPUT CONTRACT");
+    expect(work.systemPrompt).toContain(AGENT_PROMPT_VERSION);
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).not.toContain("Activation Rate");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).not.toContain("onboarding");
+    expect(social.systemPrompt).toContain("SOCIAL / ACKNOWLEDGEMENT FAST PATH");
+    expect(social.systemPrompt).not.toContain("bounded_retrieval_context");
+    expect(social.systemPrompt.length).toBeLessThan(work.systemPrompt.length);
+  });
+
+  it("supports a bounded social selection mode without phase-driven strategy routing", () => {
+    const scored = scoreCandidates({
+      profiles: [
+        profile("agent-product", "product_strategy", "product value"),
+        profile("agent-technical", "engineering_architecture", "architecture"),
+      ],
+      messageText: "سلام",
+      thread: thread("open"),
+      mode: "social",
+      turnIndex: 0,
+      rng: () => 0,
+    });
+    expect(scored.every((candidate) => candidate.relevanceScore > 0)).toBe(true);
+    expect(chooseCandidateFromScores(scored, { mode: "social", turnIndex: 0, rng: () => 1 }).explorationPool).toHaveLength(2);
   });
 });

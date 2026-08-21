@@ -11,6 +11,7 @@
     "test": "vitest run --config vitest.config.ts",
     "eval": "esbuild evals/run-evals.ts --bundle --platform=node --format=esm --log-level=error --outfile=.eval.bundle.mjs && node .eval.bundle.mjs",
     "diagnose:agent-activity": "node scripts/diagnose-agent-activity.mjs",
+    "diagnose:agent-prompt": "esbuild scripts/diagnose-agent-prompt.ts --bundle --platform=node --format=esm --log-level=error --outfile=.agent-prompt-diagnostic.bundle.mjs && node .agent-prompt-diagnostic.bundle.mjs",
     "verify": "node scripts/verify.mjs",
     "build:admin": "vite build --config admin/vite.config.ts",
     "build:worker": "wrangler deploy --dry-run",

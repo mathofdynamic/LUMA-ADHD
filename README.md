@@ -42,6 +42,7 @@ npm run dev
 | `npm run eval` | Run the deterministic, credential-free v1 behavioral eval suite |
 | `npm run verify` | Run local migrations, generated-type checks, tests, evals, builds, and startup validation |
 | `npm run openai:luna:smoke` | Operator-only non-persistent OpenAI Luna structured-output smoke; requires `GPT_API_KEY` and never prints it |
+| `npm run diagnose:agent-prompt -- --agent agent-operations --mode social` | Secret-free synthetic prompt diagnostic; see `docs/AGENT_PROMPT_ARCHITECTURE.md` |
 
 ## Phase workflow
 

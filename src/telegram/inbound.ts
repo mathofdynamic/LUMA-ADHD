@@ -13,6 +13,7 @@ import type {
 } from "./types";
 import { HumanTaskService } from "../human-tasks";
 import { DatabaseError } from "../database/errors";
+import { classifyConversationIntent, decideThreadContinuation } from "../agents/conversation-focus";
 
 type TelegramRepositories = ReturnType<typeof createRepositories>;
 
@@ -215,11 +216,38 @@ export class TelegramInboundService {
       );
     }
 
+    const classification = classifyConversationIntent(update.text);
+    let continuationReason: string | null = null;
+    let supersedesThreadId: string | null = null;
     let thread = repliedMessage
       ? await this.dependencies.repositories.threads.getById(repliedMessage.threadId)
       : update.topicId
         ? await this.dependencies.repositories.threads.findByTelegramTopic(chat.id, update.topicId)
-        : await this.dependencies.repositories.threads.findMostRecentActiveByChat(chat.id);
+        : null;
+
+    if (!repliedMessage && !update.topicId) {
+      const candidateThread = await this.dependencies.repositories.threads.findMostRecentActiveByChat(chat.id);
+      const candidateMessages = candidateThread
+        ? await this.dependencies.repositories.messages.listRecentByThread(candidateThread.id, 40)
+        : [];
+      const continuation = decideThreadContinuation({
+        candidateThread,
+        recentMessages: candidateMessages,
+        text: update.text,
+        now: receivedAt,
+        hasExplicitAgentAddress: addressedAgentId !== null,
+      });
+      continuationReason = continuation.reason;
+      if (continuation.continueThread) {
+        thread = candidateThread;
+      } else if (candidateThread) {
+        supersedesThreadId = candidateThread.id;
+      }
+    } else if (repliedMessage) {
+      continuationReason = "explicit_telegram_reply";
+    } else if (update.topicId) {
+      continuationReason = "telegram_topic_binding";
+    }
 
     if (!thread) {
       thread = await this.dependencies.repositories.threads.create({
@@ -230,6 +258,9 @@ export class TelegramInboundService {
         metadata: {
           source: "telegram",
           createdFromUpdateId: update.updateId,
+          interactionIntent: classification.interactionIntent,
+          conversationBoundaryReason: continuationReason ?? classification.boundaryReason ?? "no_active_thread",
+          supersedesThreadId,
         },
       });
     }
@@ -264,6 +295,10 @@ export class TelegramInboundService {
         addressedAgentId,
         humanTaskId: repliedHumanTaskId,
         topicId: update.topicId ?? null,
+        interactionIntent: classification.interactionIntent,
+        conversationBoundaryReason: continuationReason ?? classification.boundaryReason,
+        threadContinuationReason: continuationReason,
+        supersedesThreadId,
       },
     });
     await this.dependencies.repositories.threads.touchActivity(thread.id, receivedAt);
