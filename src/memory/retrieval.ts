@@ -26,7 +26,9 @@ const SEARCHABLE_SOURCE_KINDS: readonly MemoryItemType[] = [
 
 export function classifyRetrievalIntent(query: string): RetrievalIntent {
   const normalized = query.normalize("NFC").toLocaleLowerCase();
-  const official = /(?:\b(?:luma|pricing|subscription|workflow|capabilit(?:y|ies)|terms|video)\b|\u0644\u0648\u0645\u0627|\u0642\u06cc\u0645\u062a|\u0627\u0634\u062a\u0631\u0627\u06a9|\u0648\u0631\u06a9\u200c?\u0641\u0644\u0648|\u0642\u0627\u0628\u0644\u06cc\u062a|\u0627\u0628\u0632\u0627\u0631|\u0642\u0648\u0627\u0646\u06cc\u0646|\u0634\u0631\u0627\u06cc\u0637|\u0648\u06cc\u062f\u06cc\u0648|\u0686\u06cc\u0633\u062a|\u0686\u06cc\u0647)/u.test(normalized);
+  const officialSubject = /(?:\b(?:luma|pricing|subscription|workflow|capabilit(?:y|ies)|terms|video)\b|\u0644\u0648\u0645\u0627|\u0642\u06cc\u0645\u062a|\u0627\u0634\u062a\u0631\u0627\u06a9|\u0648\u0631\u06a9\u200c?\u0641\u0644\u0648|\u0642\u0627\u0628\u0644\u06cc\u062a|\u0627\u0628\u0632\u0627\u0631|\u0642\u0648\u0627\u0646\u06cc\u0646|\u0634\u0631\u0627\u06cc\u0637|\u0648\u06cc\u062f\u06cc\u0648)/u.test(normalized);
+  const officialQuestion = officialSubject && /(?:\u0686\u06cc\u0633\u062a|\u0686\u06cc\u0647|\u0686\u06cc\s+(?:\u0647\u0633\u062a|\u0627\u0633\u062a)|what\s+is|what\s+does)/iu.test(normalized);
+  const official = officialSubject || officialQuestion;
   const discussion = /(?:\b(?:thread|discussion|proposal|risk|continue|reply|decision)\b|\u0627\u06cc\u0646\s+\u0628\u062d\u062b|\u067e\u06cc\u0634\u0646\u0647\u0627\u062f|\u0631\u06cc\u0633\u06a9|\u0627\u062f\u0627\u0645\u0647|\u062a\u0635\u0645\u06cc\u0645)/u.test(normalized);
   if (official && discussion) return "mixed";
   if (official) return "official_factual";

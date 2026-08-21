@@ -21,7 +21,7 @@ import {
   type AgentStep,
 } from "./actions";
 import { AgentDocumentTools } from "./memory-tools";
-import { buildAgentPrompt, TELEGRAM_PRESENTATION_GUIDANCE } from "./prompts";
+import { AGENT_PROMPT_VERSION, buildAgentPrompt, TELEGRAM_PRESENTATION_GUIDANCE, type AgentPromptMode } from "./prompts";
 import {
   chooseCandidateFromScores,
   scoreCandidates,
@@ -38,6 +38,7 @@ import {
 } from "../llm";
 import type { TelegramApplicationService } from "../telegram";
 import { ContextPackService } from "../memory/retrieval";
+import type { ContextPack } from "../memory/types";
 import type { MemoryServices } from "../memory";
 import type { ReputationService } from "../reputation/service";
 import { assessOfficialGrounding, type OfficialGroundingAssessment } from "./grounding";
@@ -46,7 +47,12 @@ import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveR
 import { HumanTaskService } from "../human-tasks";
 import { DiagramService } from "../diagrams";
 import { assessContributionDuplication, isObviousRepeatedContent } from "./repetition";
-import { buildConversationFocus, type ConversationFocus } from "./conversation-focus";
+import {
+  buildConversationFocus,
+  classifyConversationIntent,
+  isLightweightInteractionIntent,
+  type ConversationFocus,
+} from "./conversation-focus";
 import { countDailyAutonomyJobs, nextUtcDay } from "../autonomy-budgets";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
@@ -100,6 +106,7 @@ interface TurnExecutionResult {
   readonly retryableFailure: boolean;
   readonly stopBurst: boolean;
   readonly repetitionSuppressed: boolean;
+  readonly superseded?: boolean;
 }
 
 function stringField(payload: JsonObject, key: string): string | null {
@@ -425,18 +432,21 @@ export class AgentRuntimeService {
         ? await this.dependencies.reputation.selectionSignals(profiles.map((profile) => profile.agent.id))
         : {}),
     };
-    const hardTurnLimit = input.mode === "interactive"
-      ? FOUNDATION_GUARDRAILS.interactiveBurstMaxTurns
-      : input.mode === "deep_work"
-        ? FOUNDATION_GUARDRAILS.deepWorkMaxTurns
-        : 1;
-    const maxTurns = Math.min(Math.max(0, input.maxTurns), hardTurnLimit);
-    const existingTurns = await this.dependencies.repositories.agentTurns.listByJob(input.job.id, Math.max(1, maxTurns));
     let recentMessages = (await this.dependencies.repositories.messages.listRecentByThread(
       input.threadId,
       input.settings.recentMessageContextCount,
     )).filter((message) => message.visibility !== "private");
     let conversationFocus = buildConversationFocus({ thread, wakeMessage, anchorMessage, recentMessages });
+    const effectiveMode = input.mode === "interactive" && isLightweightInteractionIntent(conversationFocus.interactionIntent)
+      ? "social" as const
+      : input.mode;
+    const effectiveHardTurnLimit = effectiveMode === "interactive"
+      ? FOUNDATION_GUARDRAILS.interactiveBurstMaxTurns
+      : effectiveMode === "deep_work"
+        ? FOUNDATION_GUARDRAILS.deepWorkMaxTurns
+        : 1;
+    const maxTurns = Math.min(Math.max(0, input.maxTurns), effectiveHardTurnLimit);
+    const existingTurns = await this.dependencies.repositories.agentTurns.listByJob(input.job.id, Math.max(1, maxTurns));
 
     let turnCount = existingTurns.length;
     let completedTurns = existingTurns.filter((turn) => turn.status === "completed").length;
@@ -446,7 +456,7 @@ export class AgentRuntimeService {
     // Ambient activity is a standalone organizational opportunity. Reusing an
     // old Telegram reply target can point at a deleted or expired message;
     // interactive bursts retain the direct conversation relationship.
-    let replyToMessageId = input.mode === "ambient"
+    let replyToMessageId = effectiveMode === "ambient"
       ? undefined
       : recentMessages.at(-1)?.id ?? (wakeMessage?.id || undefined);
     const recentAgentIds = existingTurns
@@ -462,7 +472,23 @@ export class AgentRuntimeService {
     }
 
     while (turnCount < maxTurns) {
-      if (input.mode === "interactive" && publicMessages >= 4) {
+      if (input.mode === "interactive") {
+        const superseding = await this.findSupersedingHumanMessage(thread, wakeMessage);
+        if (superseding) {
+          stoppedReason = "superseded_by_new_human_boundary";
+          await this.dependencies.repositories.events.append({
+            eventType: "runtime.interactive_burst_superseded",
+            aggregateType: "thread",
+            aggregateId: input.threadId,
+            threadId: input.threadId,
+            jobId: input.job.id,
+            idempotencyKey: `runtime-burst-superseded:${input.job.id}:${superseding.message.id}`,
+            payload: { supersededByMessageId: superseding.message.id, interactionIntent: superseding.intent },
+          });
+          break;
+        }
+      }
+      if ((effectiveMode === "interactive" || effectiveMode === "social") && publicMessages >= 4) {
         stoppedReason = "public_message_budget_exhausted";
         break;
       }
@@ -472,7 +498,7 @@ export class AgentRuntimeService {
       }
 
       conversationFocus = buildConversationFocus({ thread, wakeMessage, anchorMessage, recentMessages });
-      const contributionRole = input.mode === "interactive"
+      const contributionRole = effectiveMode === "interactive"
         && conversationFocus.isBroadQuestion
         && coveredDomains.size >= 2
         && turnCount >= 2
@@ -490,7 +516,7 @@ export class AgentRuntimeService {
         reputationByAgentId,
         turnIndex: turnCount,
         now: this.now(),
-        mode: input.mode,
+        mode: effectiveMode,
         isBroadQuestion: conversationFocus.isBroadQuestion,
         coveredDomains: [...coveredDomains],
         contributionRole,
@@ -502,7 +528,7 @@ export class AgentRuntimeService {
         addressedAgentId: input.addressedAgentId,
         turnIndex: turnCount,
         rng: this.rng,
-        mode: input.mode,
+        mode: effectiveMode,
       });
       const candidate = decision.candidate;
       if (candidate === null) {
@@ -532,9 +558,9 @@ export class AgentRuntimeService {
         sequenceNumber: await this.dependencies.repositories.agentTurns.nextSequence(input.threadId),
         inputMessageId: input.messageId || undefined,
         wakeReason: input.wakeReason,
-        mode: input.mode,
+        mode: effectiveMode,
         selection: this.selectionTelemetry({
-          input,
+          input: { mode: effectiveMode, threadId: input.threadId, preferredAgentId: input.preferredAgentId },
           candidate,
           scored,
           decision,
@@ -553,7 +579,7 @@ export class AgentRuntimeService {
         actor: { type: "agent", agentId: candidate.agentId },
         idempotencyKey: `agent-turn-selected:${turn.id}`,
         payload: this.selectionTelemetry({
-          input,
+          input: { mode: effectiveMode, threadId: input.threadId, preferredAgentId: input.preferredAgentId },
           candidate,
           scored,
           decision,
@@ -616,6 +642,10 @@ export class AgentRuntimeService {
             .filter((message) => message.visibility !== "private")
             .slice(-input.settings.recentMessageContextCount);
         }
+      }
+      if (result.superseded) {
+        stoppedReason = "superseded_by_new_human_boundary";
+        break;
       }
       if (result.retryableFailure) {
         stoppedReason = "retryable_provider_failure";
@@ -703,6 +733,9 @@ export class AgentRuntimeService {
       conversationFocus: {
         primaryQuery: input.focus.primaryQuery,
         interactionIntent: input.focus.interactionIntent,
+        boundaryReason: input.focus.boundaryReason,
+        currentBoundaryAt: input.focus.currentBoundaryAt,
+        retrievalSkippedReason: input.focus.retrievalSkippedReason,
         keyTerms: input.focus.keyTerms,
         isBroadQuestion: input.focus.isBroadQuestion,
         isCurrentStateQuestion: input.focus.isCurrentStateQuestion,
@@ -732,6 +765,26 @@ export class AgentRuntimeService {
       specialties: await this.dependencies.repositories.agents.listSpecialties(agent.id),
       interests: await this.dependencies.repositories.agents.listInterests(agent.id),
     })));
+  }
+
+  private async findSupersedingHumanMessage(
+    thread: ThreadRecord,
+    wakeMessage: MessageRecord | null,
+  ): Promise<{ readonly message: MessageRecord; readonly intent: string } | null> {
+    if (!wakeMessage) return null;
+    const messages = thread.chatId
+      ? await this.dependencies.repositories.messages.listRecentByChat(thread.chatId, 80)
+      : await this.dependencies.repositories.messages.listRecentByThread(thread.id, 80);
+    const candidate = messages
+      .filter((message) => message.authorType === "human" && message.createdAt > wakeMessage.createdAt)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((message) => ({ message, classification: classifyConversationIntent(message.contentText) }))
+      .find(({ classification }) => classification.supersedesStaleWork
+        || classification.interactionIntent === "social"
+        || classification.interactionIntent === "acknowledgement");
+    return candidate
+      ? { message: candidate.message, intent: candidate.classification.interactionIntent }
+      : null;
   }
 
   private async loadRequestedAgentIds(threadId: string, minimumCreatedAt: string | null = null): Promise<readonly string[]> {
@@ -770,7 +823,7 @@ export class AgentRuntimeService {
           idempotencyKey,
           metadata: {
             mode: input.mode,
-            promptVersion: "postv1-interactive-quality-v1",
+            promptVersion: AGENT_PROMPT_VERSION,
             selection: input.selection,
           },
         });
@@ -792,29 +845,50 @@ export class AgentRuntimeService {
       ? await this.dependencies.repositories.users.getById(context.wakeMessage.authorUserId).catch(() => null)
       : null;
     const query = context.conversationFocus.retrievalQuery || thread.summary || thread.title;
-    const contextPack = await (this.dependencies.memory
-      ? this.dependencies.memory.context.build({
-        query,
-        actor: { agentId: agent.id },
-        threadId: thread.id,
-        recentMessages: context.recentMessages,
-        topK: 8,
-        maxCharacters: context.settings.ragContextBudget,
-      })
-      : new ContextPackService(this.dependencies.repositories.database).build({
-        query,
-        actor: { agentId: agent.id },
-        threadId: thread.id,
-        recentMessages: context.recentMessages,
-        topK: 8,
-        maxCharacters: context.settings.ragContextBudget,
-      }));
+    const retrievalSkipped = isLightweightInteractionIntent(context.conversationFocus.interactionIntent);
+    const emptyContextPack: ContextPack = {
+      query: "",
+      items: [],
+      totalCharacters: 0,
+      truncated: false,
+      telemetry: {
+        queryIntent: "discussion",
+        retrievalCount: 0,
+        sourceTypeCounts: {},
+        officialKnowledgeCount: 0,
+        agentDocumentCount: 0,
+        sharedDocumentCount: 0,
+        totalRetrievedCharacters: 0,
+        contextTruncated: false,
+        acquisitionOperations: 0,
+      },
+    };
+    const contextPack = retrievalSkipped
+      ? emptyContextPack
+      : await (this.dependencies.memory
+        ? this.dependencies.memory.context.build({
+          query,
+          actor: { agentId: agent.id },
+          threadId: thread.id,
+          recentMessages: context.recentMessages,
+          topK: 8,
+          maxCharacters: context.settings.ragContextBudget,
+        })
+        : new ContextPackService(this.dependencies.repositories.database).build({
+          query,
+          actor: { agentId: agent.id },
+          threadId: thread.id,
+          recentMessages: context.recentMessages,
+          topK: 8,
+          maxCharacters: context.settings.ragContextBudget,
+        }));
     const retrievalTelemetry: JsonObject = {
       ...contextPack.telemetry,
       sourceTypeCounts: { ...contextPack.telemetry.sourceTypeCounts },
       selectedSources: contextPack.telemetry.selectedSources
         ? contextPack.telemetry.selectedSources.map((source) => ({ ...source }))
         : [],
+      retrievalSkippedReason: context.conversationFocus.retrievalSkippedReason,
     };
     const participants = [
       ...context.profiles.map((profile) => ({
@@ -825,12 +899,20 @@ export class AgentRuntimeService {
       ...(human ? [{ id: human.id, displayName: human.displayName, kind: "human" as const }] : []),
     ];
     let acquisitionContext: string[] = [];
+    const promptMode: AgentPromptMode = retrievalSkipped
+      ? "social"
+      : context.turn.metadata.mode === "deep_work"
+        ? "deep_work"
+        : context.turn.metadata.mode === "ambient"
+          ? "ambient"
+          : "interactive";
     const buildPrompt = () => buildAgentPrompt({
       agent,
       specialties,
       interests,
       thread,
       wakeReason: context.wakeReason,
+      mode: promptMode,
       recentMessages: context.recentMessages,
       addressedAgentId: context.addressedAgentId,
       requestedAgentIds: context.requestedAgentIds,
@@ -954,6 +1036,9 @@ export class AgentRuntimeService {
       );
       ({ step, response } = await parseWithRepair(response));
       while (step.kind === "acquisition") {
+        if (retrievalSkipped) {
+          throw new AgentAcquisitionValidationError(["lightweight social interaction cannot perform acquisition"]);
+        }
         const acquisitionLimit = Math.min(
           context.settings.ragMaxAcquisitionSteps,
           FOUNDATION_GUARDRAILS.acquisitionMaxOperations,
@@ -986,6 +1071,42 @@ export class AgentRuntimeService {
         ({ step, response } = await parseWithRepair(response));
       }
       if (step.kind !== "action") throw new AgentAcquisitionValidationError(["a final action is required after acquisition"]);
+      const supersedingAfterProvider = context.wakeMessage
+        ? await this.findSupersedingHumanMessage(thread, context.wakeMessage)
+        : null;
+      if (supersedingAfterProvider) {
+        await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "skipped", undefined, {
+          superseded: true,
+          supersededByMessageId: supersedingAfterProvider.message.id,
+          supersessionIntent: supersedingAfterProvider.intent,
+          retrieval: retrievalTelemetry,
+        });
+        await this.dependencies.repositories.events.append({
+          eventType: "runtime.agent_turn_superseded",
+          aggregateType: "agent_turn",
+          aggregateId: turn.id,
+          threadId: thread.id,
+          jobId: context.job.id,
+          actor: { type: "agent", agentId: agent.id },
+          idempotencyKey: `agent-turn-superseded:${turn.id}`,
+          payload: { supersededByMessageId: supersedingAfterProvider.message.id, interactionIntent: supersedingAfterProvider.intent },
+        });
+        return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true, repetitionSuppressed: false, superseded: true };
+      }
+      if (retrievalSkipped && step.action.intent !== "SPEAK" && step.action.intent !== "WAIT") {
+        step = {
+          kind: "action",
+          action: {
+            intent: "WAIT",
+            content: null,
+            confidence: Math.min(step.action.confidence, 0.8),
+            reasonSummary: "Lightweight social turn has no durable work.",
+            targetAgentId: null,
+            targetThreadId: null,
+            metadata: { suppressedIntent: step.action.intent },
+          },
+        };
+      }
       if (step.action.intent === "SPEAK") {
         grounding = assessOfficialGrounding(step.action.content ?? "", contextPack, {
           currentStateQuestion: context.conversationFocus.isCurrentStateQuestion,
@@ -1140,11 +1261,41 @@ export class AgentRuntimeService {
 
     let outputMessageId: string | undefined;
     let deliveryStatus: string | undefined;
+    const supersedingBeforeAction = context.wakeMessage
+      ? await this.findSupersedingHumanMessage(thread, context.wakeMessage)
+      : null;
+    if (supersedingBeforeAction) {
+      await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "skipped", undefined, {
+        superseded: true,
+        supersededByMessageId: supersedingBeforeAction.message.id,
+        supersessionIntent: supersedingBeforeAction.intent,
+        retrieval: retrievalTelemetry,
+      });
+      await this.dependencies.repositories.events.append({
+        eventType: "runtime.agent_turn_superseded",
+        aggregateType: "agent_turn",
+        aggregateId: turn.id,
+        threadId: thread.id,
+        jobId: context.job.id,
+        actor: { type: "agent", agentId: agent.id },
+        idempotencyKey: `agent-turn-superseded:${turn.id}`,
+        payload: { supersededByMessageId: supersedingBeforeAction.message.id, interactionIntent: supersedingBeforeAction.intent },
+      });
+      return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true, repetitionSuppressed: false, superseded: true };
+    }
     try {
       const execution = await this.executeAction(context, action);
       outputMessageId = execution.outputMessageId;
       deliveryStatus = execution.deliveryStatus;
       repetitionSuppressed = repetitionSuppressed || execution.repetitionSuppressed === true;
+      if (deliveryStatus === "superseded") {
+        await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "skipped", undefined, {
+          superseded: true,
+          deliveryStatus,
+          retrieval: retrievalTelemetry,
+        });
+        return { action: null, outputMessageId: undefined, wait: false, retryableFailure: false, stopBurst: true, repetitionSuppressed: false, superseded: true };
+      }
     } catch (error: unknown) {
       await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
         ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding, currentStateGrounding, repetitionSuppressed),
@@ -1295,6 +1446,22 @@ export class AgentRuntimeService {
           },
         });
         await this.dependencies.repositories.threads.touchActivity(context.thread.id, this.now());
+        const supersedingAfterCanonical = context.wakeMessage
+          ? await this.findSupersedingHumanMessage(context.thread, context.wakeMessage)
+          : null;
+        if (supersedingAfterCanonical) {
+          await this.dependencies.repositories.events.append({
+            eventType: "runtime.agent_projection_superseded",
+            aggregateType: "message",
+            aggregateId: canonical.id,
+            threadId: context.thread.id,
+            jobId: context.job.id,
+            actor: { type: "agent", agentId: context.agent.id },
+            idempotencyKey: `${actionKey}:superseded-projection`,
+            payload: { supersededByMessageId: supersedingAfterCanonical.message.id, interactionIntent: supersedingAfterCanonical.intent },
+          });
+          return { deliveryStatus: "superseded" };
+        }
         let deliveryStatus: string | undefined;
         if (this.dependencies.telegram && context.thread.chatId) {
           try {

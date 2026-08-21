@@ -108,6 +108,26 @@ function application(transport?: TelegramTransport) {
 }
 
 describe("Phase 02 Telegram ingress", () => {
+  it("does not attach a pure greeting to the most recent strategic Thread", async () => {
+    const initial = await application().ingest({
+      botAlias: "gateway",
+      receivedAt: "2026-08-14T08:10:00.000Z",
+      payload: telegramUpdate(20_000, 30_000, "بررسی استراتژی محصول را ادامه دهید"),
+    });
+    const greeting = await application().ingest({
+      botAlias: "gateway",
+      receivedAt: "2026-08-14T08:10:01.000Z",
+      payload: telegramUpdate(20_101, 30_101, "سلام"),
+    });
+
+    expect(initial.threadId).toBeDefined();
+    expect(greeting.threadId).toBeDefined();
+    expect(greeting.threadId).not.toBe(initial.threadId);
+    const message = await repositories.messages.getById(greeting.messageId as string);
+    expect(message.metadata.interactionIntent).toBe("social");
+    expect(message.metadata.threadContinuationReason).toBe("social_new_boundary");
+  });
+
   it("creates one canonical human message and one coarse interactive job", async () => {
     const result = await application().ingest({
       botAlias: "gateway",

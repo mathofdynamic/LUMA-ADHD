@@ -97,6 +97,13 @@ async function runSmoke(env: SmokeEnvironment, body: Record<string, unknown>) {
   const question = typeof body.question === "string" && body.question.trim().length > 0
     ? body.question.trim().slice(0, 1_000)
     : "این یک تست محدود اپراتوری است؛ بدون ارسال تلگرام، یک پاسخ کوتاه و مستند درباره لوما بده.";
+  const smokeUser = await repositories.users.upsertByExternalKey({
+    externalKey: "postv1-luna-provider-smoke-human",
+    displayName: "LUMA operator smoke",
+    username: "operator-smoke",
+    isAdmin: false,
+    metadata: { smoke: "postv1-openai-luna", operatorOnly: true },
+  });
 
   await repositories.threads.create({
     id: threadId,
@@ -107,9 +114,10 @@ async function runSmoke(env: SmokeEnvironment, body: Record<string, unknown>) {
   await repositories.messages.create({
     id: messageId,
     threadId,
-    authorType: "system",
+    authorType: "human",
+    authorUserId: smokeUser.id,
     contentText: question,
-    origin: "system",
+    origin: "internal",
     visibility: "internal",
     idempotencyKey: `postv1-luna-provider-smoke-message:${suffix}`,
     metadata: { smoke: "postv1-openai-luna", operatorOnly: true },
@@ -160,6 +168,13 @@ export default {
   async fetch(request: Request, env: SmokeEnvironment): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/__luma_luna_smoke/ready") return request.method === "GET" ? jsonResponse({ ok: true }) : methodNotAllowed();
+    if (url.pathname === "/__luma_luna_smoke/config") {
+      if (request.method !== "GET") return methodNotAllowed();
+      const suppliedSecret = request.headers.get("X-Luma-Smoke-Secret");
+      if (!suppliedSecret || !constantTimeEqual(suppliedSecret, env.SMOKE_SECRET)) return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+      const normal = resolveNormalAgentConfig(env);
+      return jsonResponse({ ok: true, openaiConfigured: resolveOpenAIKey(env) !== undefined, model: normal.model, reasoningEffort: normal.reasoningEffort });
+    }
     if (url.pathname !== "/run") return jsonResponse({ ok: false, error: "not_found" }, 404);
     if (request.method !== "POST") return methodNotAllowed();
     const suppliedSecret = request.headers.get("X-Luma-Smoke-Secret");
@@ -167,7 +182,12 @@ export default {
     try {
       return jsonResponse(await runSmoke(env, await requestBody(request)));
     } catch (error: unknown) {
-      return jsonResponse({ ok: false, error: "luna_provider_smoke_failed", errorName: error instanceof Error ? error.name : "unknown" }, 502);
+      const message = error instanceof Error ? error.message : "unknown";
+      const safeMessage = message
+        .replace(/Bearer\s+[^\s]+/giu, "Bearer [redacted]")
+        .replace(/https?:\/\/[^\s]+/giu, "[url]")
+        .slice(0, 240);
+      return jsonResponse({ ok: false, error: "luna_provider_smoke_failed", errorName: error instanceof Error ? error.name : "unknown", errorMessage: safeMessage }, 502);
     }
   },
 };

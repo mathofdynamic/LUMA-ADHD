@@ -302,6 +302,68 @@ describe("Phase 03 action contract and provider boundary", () => {
 });
 
 describe("Phase 03 bounded orchestration", () => {
+  it("uses the social fast path for a greeting and never performs RAG or a multi-Agent burst", async () => {
+    const provider = new FakeProvider().enqueueJson(action("SPEAK", { content: "سلام!" }));
+    const transport = new FakeTelegramTransport();
+    const context = await fixture("سلام");
+    const result = await runtime(provider, transport).runInteractiveBurst({
+      job: context.job,
+      messageId: context.messageId,
+      threadId: context.threadId,
+      wakeReason: "human_message",
+    });
+
+    expect(result.turns).toBe(1);
+    expect(result.publicMessages).toBe(1);
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0]?.systemPrompt).toContain("SOCIAL / ACKNOWLEDGEMENT FAST PATH");
+    expect(provider.calls[0]?.systemPrompt).not.toContain("bounded_retrieval_context");
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]?.text).toBe("سلام!");
+  });
+
+  it("skips a provider result when a newer correction supersedes the in-flight turn", async () => {
+    const context = await fixture("وضعیت فعلی محصول را بررسی کنید");
+    const provider = new FakeProvider();
+    provider.enqueue(async () => {
+      const wake = await repositories.messages.getById(context.messageId);
+      await repositories.messages.create({
+        id: testId("runtime-correction"),
+        threadId: context.threadId,
+        chatId: context.chatId,
+        authorType: "human",
+        authorUserId: wake.authorUserId as string,
+        contentText: "گفتم سلام فقط",
+        origin: "internal",
+        visibility: "public",
+      });
+      return {
+        text: action("SPEAK", { content: "این پاسخ دیگر منطبق با درخواست فعلی نیست." }),
+        provider: "fake",
+        model: "fake",
+        finishReason: "stop",
+        latencyMs: 0,
+      };
+    });
+
+    const result = await runtime(provider).runInteractiveBurst({
+      job: context.job,
+      messageId: context.messageId,
+      threadId: context.threadId,
+      wakeReason: "human_message",
+    });
+    const turns = await repositories.agentTurns.listByJob(context.job.id);
+    const publicMessages = await env.DB
+      .prepare("SELECT COUNT(*) AS count FROM messages WHERE thread_id = ? AND author_type = 'agent' AND visibility = 'public'")
+      .bind(context.threadId)
+      .first<{ count: number }>();
+
+    expect(result.stoppedReason).toBe("superseded_by_new_human_boundary");
+    expect(turns[0]?.status).toBe("skipped");
+    expect(turns[0]?.metadata.superseded).toBe(true);
+    expect(publicMessages?.count).toBe(0);
+  });
+
   it("builds participant-aware Telegram guidance without making formatting personality-bound", async () => {
     const context = await fixture("یک سؤال فارسی درباره بهبود مسیر کاربر", { addressedAgentId: "agent-product" });
     const agent = await repositories.agents.getById("agent-product");

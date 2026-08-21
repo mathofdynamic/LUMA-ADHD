@@ -38,7 +38,7 @@ function Install-TemporarySecret([string]$SecretName, [string]$SecretValue) {
   if (-not $process.Start()) { throw ('Unable to start secret installation for ' + $SecretName) }
   $stdoutTask = $process.StandardOutput.ReadToEndAsync()
   $stderrTask = $process.StandardError.ReadToEndAsync()
-  $process.StandardInput.Write($SecretValue)
+  $process.StandardInput.WriteLine($SecretValue)
   $process.StandardInput.Close()
   $process.WaitForExit()
   $null = $stdoutTask.Result
@@ -106,6 +106,20 @@ try {
   }
   if (-not $ready) { throw 'Temporary Luna smoke Worker did not become ready' }
   Install-TemporarySecret 'OPENAI_API_KEY' $gptKey
+  $secretNames = Invoke-Wrangler @('secret', 'list', '--config', $configFile, '--name', $workerName)
+  if ($secretNames -notmatch 'OPENAI_API_KEY') { throw 'Temporary Luna smoke Worker secret was not registered' }
+  $configured = $false
+  for ($attempt = 0; $attempt -lt 60; $attempt += 1) {
+    try {
+      $configRequest = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, ($workerUrl + '/__luma_luna_smoke/config'))
+      $configRequest.Headers.Add('X-Luma-Smoke-Secret', $smokeSecret)
+      $configResponse = $http.SendAsync($configRequest).Result
+      $configBody = $configResponse.Content.ReadAsStringAsync().Result | ConvertFrom-Json
+      if ($configResponse.IsSuccessStatusCode -and $configBody.openaiConfigured -eq $true) { $configured = $true; break }
+    } catch { }
+    Start-Sleep -Seconds 1
+  }
+  if (-not $configured) { throw 'Temporary Luna smoke Worker secret was not available at the runtime edge' }
   $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, ($workerUrl + '/run'))
   $request.Headers.Add('X-Luma-Smoke-Secret', $smokeSecret)
   $requestBody = @{ question = $Question; maxTurns = $MaxTurns; addressedAgentId = if ([string]::IsNullOrWhiteSpace($AddressedAgentId)) { $null } else { $AddressedAgentId } } | ConvertTo-Json -Compress

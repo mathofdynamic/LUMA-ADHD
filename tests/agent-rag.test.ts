@@ -72,6 +72,7 @@ describe("Phase 05 persistent Agent RAG", () => {
   it("classifies LUMA factual questions and reserves official knowledge in a bounded pack", async () => {
     const officialBody = await syncOfficialFixture();
     expect(classifyRetrievalIntent("لوما چی هست و چه قابلیت‌هایی دارد؟")).toBe("official_factual");
+    expect(classifyRetrievalIntent("کیان، مشکل latency این معماری backend چیه؟")).toBe("workspace");
     const user = await repositories.users.create({ id: testId("rag-pack-user"), displayName: "Pack Human" });
     const thread = await repositories.threads.create({ id: testId("rag-pack-thread"), title: "LUMA facts", createdByUserId: user.id });
     const noisyMessages = await Promise.all(Array.from({ length: 4 }, (_, index) => repositories.messages.create({
