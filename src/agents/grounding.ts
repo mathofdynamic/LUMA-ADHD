@@ -65,8 +65,18 @@ function termsFor(value: string): readonly string[] {
     .filter((term) => term.length >= 3 && !NON_DISTINCTIVE_TERMS.has(term));
 }
 
-export function assessOfficialGrounding(content: string, contextPack: ContextPack): OfficialGroundingAssessment {
-  const required = (contextPack.telemetry.queryIntent === "official_factual" || contextPack.telemetry.queryIntent === "mixed")
+export function assessOfficialGrounding(
+  content: string,
+  contextPack: ContextPack,
+  options: { readonly currentStateQuestion?: boolean } = {},
+): OfficialGroundingAssessment {
+  // A current-state diagnosis still retrieves official LUMA knowledge, but
+  // official product documentation cannot by itself establish today's
+  // organizational priorities. Current-state evidence is checked separately
+  // by assessCurrentStateGrounding so an irrelevant official chunk does not
+  // turn a bounded, qualified answer into a silent failed turn.
+  const required = !options.currentStateQuestion
+    && (contextPack.telemetry.queryIntent === "official_factual" || contextPack.telemetry.queryIntent === "mixed")
     && contextPack.telemetry.officialKnowledgeCount > 0;
   const official = contextPack.items.filter((item) => item.type === "knowledge_chunk");
   const sourceIds = official.map((item) => item.sourceId);

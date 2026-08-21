@@ -294,6 +294,34 @@ export const AGENT_ACQUISITION_SCHEMA = `{
   }
 }`;
 
+// OpenAI strict structured outputs require a single closed object with every
+// property declared as required. The application parser still owns the
+// semantic distinction between an action and an acquisition step. Nullable
+// fields keep that wire contract compatible with both existing contracts.
+export const AGENT_STEP_JSON_SCHEMA: Readonly<Record<string, unknown>> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    step: { type: "string", enum: ["ACTION", "ACQUIRE"] },
+    intent: { type: ["string", "null"] },
+    content: { type: ["string", "null"], maxLength: 600 },
+    confidence: { type: ["number", "null"] },
+    reason_summary: { type: ["string", "null"], maxLength: 80 },
+    target_agent_id: { type: ["string", "null"] },
+    target_thread_id: { type: ["string", "null"] },
+    metadata: { type: "object", properties: {}, required: [], additionalProperties: false },
+    operation: { type: ["string", "null"] },
+    query: { type: ["string", "null"], maxLength: 500 },
+    logical_path: { type: ["string", "null"], maxLength: 512 },
+    version_number: { type: ["integer", "null"] },
+    limit: { type: ["integer", "null"] },
+  },
+  required: [
+    "step", "intent", "content", "confidence", "reason_summary", "target_agent_id", "target_thread_id",
+    "metadata", "operation", "query", "logical_path", "version_number", "limit",
+  ],
+};
+
 export const AGENT_STEP_SCHEMA = `one of these two JSON contracts:
 FINAL ACTION:
 ${AGENT_ACTION_SCHEMA}

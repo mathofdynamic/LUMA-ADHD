@@ -14,6 +14,7 @@ import {
   AgentActionValidationError,
   AgentAcquisitionValidationError,
   AGENT_STEP_SCHEMA,
+  AGENT_STEP_JSON_SCHEMA,
   parseAgentStep,
   type AgentAction,
   type AgentAcquisitionRequest,
@@ -33,6 +34,7 @@ import {
   normalizeProviderError,
   type LLMGenerateResponse,
   type LLMProvider,
+  type LLMReasoningEffort,
 } from "../llm";
 import type { TelegramApplicationService } from "../telegram";
 import { ContextPackService } from "../memory/retrieval";
@@ -54,6 +56,7 @@ export interface AgentRuntimeDependencies {
   readonly provider: LLMProvider;
   readonly telegram?: Pick<TelegramApplicationService, "projectAgentMessage">;
   readonly modelKey: string;
+  readonly reasoningEffort?: LLMReasoningEffort;
   readonly memory?: MemoryServices;
   readonly reputation?: ReputationService;
   readonly runtimeSettings?: EffectiveRuntimeSettings;
@@ -282,7 +285,7 @@ export class AgentRuntimeService {
   async runDeepWork(job: JobRecord, threadId: string, trigger: string): Promise<RuntimeBurstResult> {
     const settings = await this.runtimeSettings;
     const dailyDeepWorkJobs = await countDailyAutonomyJobs(this.dependencies.repositories.database, "deep_work", this.now());
-    if (dailyDeepWorkJobs > settings.deepWorkDailyJobBudget) {
+    if (dailyDeepWorkJobs >= settings.deepWorkDailyJobBudget) {
       const nextDueAt = nextUtcDay(this.now());
       const deferredJob = await this.dependencies.repositories.jobs.create({
         jobType: job.jobType,
@@ -863,6 +866,16 @@ export class AgentRuntimeService {
           messages,
           temperature: 0,
           maxOutputTokens,
+          reasoningEffort: this.dependencies.reasoningEffort,
+          ...(this.dependencies.provider.name === "openai"
+            ? {
+              structuredOutput: {
+                name: "luma_agent_step",
+                description: "A bounded LUMA ADHD normal-Agent action or acquisition step.",
+                schema: AGENT_STEP_JSON_SCHEMA,
+              },
+            }
+            : {}),
           timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
           metadata: Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])),
         });
@@ -904,7 +917,7 @@ export class AgentRuntimeService {
             TELEGRAM_PRESENTATION_GUIDANCE,
             AGENT_STEP_SCHEMA,
             "Use literal UTF-8 Persian or English text. Do not emit \\uXXXX escapes.",
-            "Keep content under 4096 Unicode characters and reason_summary under 160 characters. Use null targets unless the intent requires one.",
+            "Keep SPEAK content under 600 Unicode characters and reason_summary under 80 characters. Use null targets unless the intent requires one. If evidence is insufficient, return WAIT or one concise qualification.",
             "Do not add prose, Markdown fences, or hidden reasoning. Reply in the language of recent_context.",
           ].join("\n"),
           [{
@@ -974,7 +987,9 @@ export class AgentRuntimeService {
       }
       if (step.kind !== "action") throw new AgentAcquisitionValidationError(["a final action is required after acquisition"]);
       if (step.action.intent === "SPEAK") {
-        grounding = assessOfficialGrounding(step.action.content ?? "", contextPack);
+        grounding = assessOfficialGrounding(step.action.content ?? "", contextPack, {
+          currentStateQuestion: context.conversationFocus.isCurrentStateQuestion,
+        });
         if (grounding.required && !grounding.satisfied) {
           if (repairAttempts >= 1) {
             throw new AgentActionValidationError(["SPEAK did not contain enough distinctive material from retrieved official LUMA knowledge"]);
@@ -1004,7 +1019,9 @@ export class AgentRuntimeService {
           if (step.kind !== "action" || step.action.intent !== "SPEAK") {
             throw new AgentActionValidationError(["grounding repair must return a final SPEAK action"]);
           }
-          grounding = assessOfficialGrounding(step.action.content ?? "", contextPack);
+          grounding = assessOfficialGrounding(step.action.content ?? "", contextPack, {
+            currentStateQuestion: context.conversationFocus.isCurrentStateQuestion,
+          });
           if (grounding.required && !grounding.satisfied) {
             throw new AgentActionValidationError(["grounding repair still did not use retrieved official LUMA knowledge"]);
           }
@@ -1538,7 +1555,10 @@ export class AgentRuntimeService {
       durationMs,
       errorSummary: failure ? safeErrorSummary(failure) : undefined,
       idempotencyKey,
-      metadata: response?.metadata ? { ...response.metadata } : {},
+      metadata: {
+        ...(response?.metadata ? { ...response.metadata } : {}),
+        ...(response?.usage?.reasoningTokens === undefined ? {} : { reasoningTokens: String(response.usage.reasoningTokens) }),
+      },
     }).catch((error: unknown) => {
       if (!(error instanceof NotFoundError)) throw error;
     });

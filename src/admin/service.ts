@@ -15,6 +15,11 @@ type Repositories = ReturnType<typeof createRepositories>;
 type Row = Record<string, unknown>;
 
 export interface AdminRuntimeDisplayConfig {
+  readonly normalProvider?: string;
+  readonly normalModel?: string;
+  readonly normalReasoningEffort?: string;
+  readonly normalConfigured?: boolean;
+  readonly openaiConfigured?: boolean;
   readonly godProvider?: string;
   readonly godModel?: string;
   readonly godReasoningEffort?: string;
@@ -77,6 +82,13 @@ function nullableNumber(value: unknown): number | null {
 
 function nullableBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+function estimatedOpenAICostUsd(model: unknown, inputTokens: unknown, outputTokens: unknown): number | null {
+  if (model !== "gpt-5.6-luna") return null;
+  const input = numberValue(inputTokens, 0);
+  const output = numberValue(outputTokens, 0);
+  return Number(((input * 0.2 + output * 1.2) / 1_000_000).toFixed(8));
 }
 
 function nullableJsonObject(value: unknown): JsonObject | null {
@@ -766,7 +778,16 @@ export class AdminObservatoryService {
         model: this.runtimeConfig.godModel ?? "not configured",
         reasoningEffort: this.runtimeConfig.godReasoningEffort ?? "not configured",
         configured: this.runtimeConfig.godConfigured === true,
-        normalModel: this.runtimeConfig.nebulaModel ?? "not configured",
+        normalProvider: this.runtimeConfig.normalProvider ?? "not configured",
+        normalModel: this.runtimeConfig.normalModel ?? "not configured",
+        normalReasoningEffort: this.runtimeConfig.normalReasoningEffort ?? "not configured",
+        normalConfigured: this.runtimeConfig.normalConfigured === true,
+        nebulaFallback: {
+          provider: "nebula",
+          model: this.runtimeConfig.nebulaModel ?? "not configured",
+          configured: this.runtimeConfig.nebulaConfigured === true,
+          active: this.runtimeConfig.normalProvider === "nebula",
+        },
         transport: "gateway",
         godTelegramBot: false,
       },
@@ -797,9 +818,14 @@ export class AdminObservatoryService {
       ).all<Row>(),
       this.database.prepare("SELECT * FROM scheduled_jobs ORDER BY next_run_at ASC LIMIT 30").all<Row>(),
       this.database.prepare(
-        `SELECT provider_name, model_name, status, COUNT(*) AS calls, SUM(COALESCE(total_tokens,0)) AS tokens,
+        `SELECT provider_name, model_name,
+                json_extract(metadata_json, '$.reasoningEffort') AS reasoning_effort,
+                status, COUNT(*) AS calls,
+                SUM(COALESCE(prompt_tokens,0)) AS input_tokens,
+                SUM(COALESCE(completion_tokens,0)) AS output_tokens,
+                SUM(COALESCE(total_tokens,0)) AS tokens,
                 AVG(duration_ms) AS average_latency_ms, MAX(created_at) AS last_call
-         FROM provider_usage GROUP BY provider_name, model_name ORDER BY last_call DESC LIMIT 20`,
+         FROM provider_usage GROUP BY provider_name, model_name, reasoning_effort, status ORDER BY last_call DESC LIMIT 20`,
       ).all<Row>(),
       this.database.prepare(
         `SELECT id, status, bot_alias, agent_id, thread_id, attempt_count, next_attempt_at, last_error, created_at, sent_at
@@ -839,9 +865,34 @@ export class AdminObservatoryService {
     const hasKnowledgeFailure = knowledge.results.some((row) => stringValue(row.status) === "failed");
     const hasDiagramFailure = artifacts.results.some((row) => ["failed", "quota_exhausted"].includes(stringValue(row.render_status)));
     const queuedJobs = jobs.results.filter((row) => ["pending", "retry_scheduled"].includes(stringValue(row.status))).length;
+    const providerSummary = providers.results.map((row) => ({
+      ...row,
+      estimated_cost_usd: estimatedOpenAICostUsd(row.model_name, row.input_tokens, row.output_tokens),
+    }));
     return {
       generatedAt: nowIso(), jobs: jsonRows(jobs.results), schedules: jsonRows(schedules.results),
-      providers: jsonRows(providers.results), telegram: jsonRows(telegram.results),
+      providers: jsonRows(providerSummary),
+      providerConfiguration: {
+        normal: {
+          provider: this.runtimeConfig.normalProvider ?? "not configured",
+          model: this.runtimeConfig.normalModel ?? "not configured",
+          reasoningEffort: this.runtimeConfig.normalReasoningEffort ?? "not configured",
+          configured: this.runtimeConfig.normalConfigured === true,
+        },
+        god: {
+          provider: this.runtimeConfig.godProvider ?? "not configured",
+          model: this.runtimeConfig.godModel ?? "not configured",
+          reasoningEffort: this.runtimeConfig.godReasoningEffort ?? "not configured",
+          configured: this.runtimeConfig.godConfigured === true,
+        },
+        nebulaFallback: {
+          provider: "nebula",
+          model: this.runtimeConfig.nebulaModel ?? "not configured",
+          configured: this.runtimeConfig.nebulaConfigured === true,
+          active: this.runtimeConfig.normalProvider === "nebula",
+        },
+      },
+      telegram: jsonRows(telegram.results),
       knowledge: jsonRows(knowledge.results), errors: errors.results.map((row) => ({ ...row, category: this.errorCategory(row) })),
       audit: audit.results.map((row) => ({ ...row, payload: objectValue(row.payload_json) })), pressure: counts,
       turns: jsonRows(turns.results), artifacts: jsonRows(artifacts.results), humanTasks: jsonRows(taskState.results),
@@ -862,6 +913,11 @@ export class AdminObservatoryService {
       items: jsonValue((await listAdminSettings(this.database)).map((setting) => jsonObject(setting))),
       configuration: {
         telegramConfigured: this.runtimeConfig.telegramConfigured === true,
+        normalProvider: this.runtimeConfig.normalProvider ?? "not configured",
+        normalModel: this.runtimeConfig.normalModel ?? "not configured",
+        normalReasoningEffort: this.runtimeConfig.normalReasoningEffort ?? "not configured",
+        normalConfigured: this.runtimeConfig.normalConfigured === true,
+        openaiConfigured: this.runtimeConfig.openaiConfigured === true,
         nebulaConfigured: this.runtimeConfig.nebulaConfigured === true,
         godConfigured: this.runtimeConfig.godConfigured === true,
         adminConfigured: this.runtimeConfig.adminConfigured === true,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assessContributionDuplication,
+  assessOfficialGrounding,
   assessCurrentStateGrounding,
   buildConversationFocus,
   chooseCandidateFromScores,
@@ -199,6 +200,30 @@ describe("post-v1 interactive discussion quality", () => {
     expect(assessment.supported).toBe(false);
     expect(assessment.state).toBe("unsupported");
     expect(qualifyUnsupportedCurrentClaim(content, assessment)).toContain("فرضیه");
+  });
+
+  it("does not require an irrelevant official chunk to answer a current-state diagnosis", () => {
+    const pack: ContextPack = {
+      ...contextPack([{
+        type: "knowledge_chunk",
+        sourceId: "terms-of-use-1",
+        title: "Official terms",
+        pathOrUrl: "https://example.invalid/terms.md",
+        excerpt: "هزینه و شرایط استفاده از خروجی در این سند توضیح داده می‌شود.",
+        authority: 100,
+        score: 1,
+        updatedAt: "2026-08-21T00:00:00.000Z",
+        provenance: { source: "official" },
+      }]),
+      telemetry: {
+        ...contextPack([]).telemetry,
+        queryIntent: "official_factual",
+        officialKnowledgeCount: 1,
+      },
+    };
+    const assessment = assessOfficialGrounding("اطلاعات فعلی برای رتبه‌بندی کافی نیست.", pack, { currentStateQuestion: true });
+    expect(assessment.required).toBe(false);
+    expect(assessment.satisfied).toBe(true);
   });
 
   it("keeps a technical specialist ahead of neglected but irrelevant finance", () => {

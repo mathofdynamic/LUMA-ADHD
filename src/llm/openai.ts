@@ -9,7 +9,7 @@ import type {
 } from "./types";
 
 export const VERIFIED_OPENAI_BASE_URL = "https://api.openai.com/v1";
-export const VERIFIED_OPENAI_MODEL = "gpt-5.6-sol";
+export const VERIFIED_OPENAI_MODEL = "gpt-5.6-luna";
 
 interface OpenAIResponse {
   readonly id?: unknown;
@@ -46,8 +46,10 @@ function usageFrom(value: unknown): LLMUsage | undefined {
   const promptTokens = finiteNumber(value.input_tokens) ?? finiteNumber(value.prompt_tokens);
   const completionTokens = finiteNumber(value.output_tokens) ?? finiteNumber(value.completion_tokens);
   const totalTokens = finiteNumber(value.total_tokens);
-  if (promptTokens === undefined && completionTokens === undefined && totalTokens === undefined) return undefined;
-  return { promptTokens, completionTokens, totalTokens };
+  const details = isRecord(value.output_tokens_details) ? value.output_tokens_details : undefined;
+  const reasoningTokens = finiteNumber(details?.reasoning_tokens) ?? finiteNumber(value.reasoning_tokens);
+  if (promptTokens === undefined && completionTokens === undefined && totalTokens === undefined && reasoningTokens === undefined) return undefined;
+  return { promptTokens, completionTokens, totalTokens, reasoningTokens };
 }
 
 function textFromContent(value: unknown): string | undefined {
@@ -146,7 +148,7 @@ export class OpenAIProvider implements LLMProvider {
 
   async generate(request: LLMGenerateRequest): Promise<LLMGenerateResponse> {
     if (this.apiKey.length === 0) {
-      throw providerFailure("configuration", "GOD_API_KEY is not configured", { retryable: false });
+      throw providerFailure("configuration", "OpenAI API key is not configured", { retryable: false });
     }
     if (request.messages.length === 0 && request.systemPrompt.trim().length === 0) {
       throw providerFailure("configuration", "OpenAI request must contain at least one message", { retryable: false });
@@ -216,6 +218,11 @@ export class OpenAIProvider implements LLMProvider {
           ? stringValue(parsed.incomplete_details.reason)
           : undefined;
         if (incompleteReason !== undefined) metadata.incompleteReason = incompleteReason.slice(0, 80);
+        if (request.reasoningEffort !== undefined) metadata.reasoningEffort = request.reasoningEffort;
+        const reasoningTokens = parsed.usage && isRecord(parsed.usage)
+          ? usageFrom(parsed.usage)?.reasoningTokens
+          : undefined;
+        if (reasoningTokens !== undefined) metadata.reasoningTokens = String(reasoningTokens);
 
         return {
           text: content.text,

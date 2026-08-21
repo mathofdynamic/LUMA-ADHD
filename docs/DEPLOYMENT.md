@@ -10,8 +10,8 @@ Required:
 - a Cloudflare account authenticated with Wrangler;
 - the D1 database and Queue resources configured by `wrangler.jsonc`;
 - the private Telegram group, gateway bot, and eight outbound persona bots;
-- Nebula access for normal Agents;
-- OpenAI GOD access;
+- OpenAI access for normal Agents and GOD;
+- Nebula access only when deliberately selecting the retained fallback;
 - an operator-owned `ADMIN_AUTH_SECRET`.
 
 Optional:
@@ -47,7 +47,7 @@ npx wrangler d1 migrations apply luma-adhd --remote
 npx wrangler d1 migrations list luma-adhd --remote
 ```
 
-Phase 08 adds migration `0009_hardening_deployment.sql`. It creates only the indexed job-type/creation-time lookup used by the bounded internal daily safety budgets. Do not edit migrations 0000–0009 after they are applied.
+Phase 08 adds migration `0009_hardening_deployment.sql`. It creates only the indexed job-type/creation-time lookup used by the bounded internal daily safety budgets. Do not edit migrations 0000–0009 after they are applied. The Luna migration adds no database migration.
 
 ## Production secrets
 
@@ -65,6 +65,7 @@ TELEGRAM_CUSTOMER_BOT_TOKEN
 TELEGRAM_OPERATIONS_BOT_TOKEN
 TELEGRAM_HERETIC_BOT_TOKEN
 NEBULA_API_KEY
+OPENAI_API_KEY
 GOD_API_KEY
 ADMIN_AUTH_SECRET
 ```
@@ -89,10 +90,14 @@ TELEGRAM_ADMIN_USER_IDS
 TELEGRAM_BOT_IDENTITIES_JSON
 NEBULA_BASE_URL
 NEBULA_MODEL
-GOD_PROVIDER
-GOD_BASE_URL
-GOD_MODEL
-GOD_REASONING_EFFORT
+NORMAL_AGENT_PROVIDER=openai
+NORMAL_AGENT_BASE_URL=https://api.openai.com/v1
+NORMAL_AGENT_MODEL=gpt-5.6-luna
+NORMAL_AGENT_REASONING_EFFORT=medium
+GOD_PROVIDER=openai
+GOD_BASE_URL=https://api.openai.com/v1
+GOD_MODEL=gpt-5.6-luna
+GOD_REASONING_EFFORT=xhigh
 LUMA_ENVIRONMENT
 LUMA_PHASE
 ```
@@ -127,17 +132,20 @@ npm run build
 npx wrangler deploy --keep-vars
 ```
 
+Install `OPENAI_API_KEY` through secure Wrangler secret input before deploying the Luna configuration. Keep the existing `GOD_API_KEY` until the shared-key production smoke succeeds; the Worker prefers `OPENAI_API_KEY` and falls back to `GOD_API_KEY` for compatibility. The operator-only `GPT_API_KEY` environment name is never installed in the Worker.
+
 Post-deploy smoke, in order:
 
 1. `GET /api/health` and `GET /api/version`.
 2. Confirm remote migration list has no pending migrations.
 3. Log in to `/admin/login` and load Strategy Room.
 4. Verify gateway webhook health, persona webhook count 0, and no GOD webhook.
-5. Inspect one existing normal Agent result and official-LUMA RAG provenance.
-6. Inspect existing Human Tasks, files, reputation, GOD, knowledge, Jobs, and System state.
-7. Confirm source-only diagram artifacts remain inspectable.
+5. Confirm Admin Providers shows normal Agents as OpenAI `gpt-5.6-luna` / `medium`, GOD as OpenAI `gpt-5.6-luna` / `xhigh`, and Nebula as configured fallback/inactive where applicable.
+6. Inspect one existing normal Agent result and official-LUMA RAG provenance.
+7. Inspect existing Human Tasks, files, reputation, GOD, knowledge, Jobs, and System state.
+8. Confirm source-only diagram artifacts remain inspectable.
 
-Live provider/GOD/Telegram calls are expensive and are not part of `npm run verify`. Use the Phase 05/07 operator smoke tools only when a deployment-specific revalidation is required.
+Live provider/GOD/Telegram calls are expensive and are not part of `npm run verify`. Use `npm run openai:luna:smoke` for a non-persistent normal/GOD Responses contract smoke. When remote-D1 runtime telemetry must be verified without Telegram projection, run `powershell -File .\scripts\openai-luna-runtime-smoke.ps1`; it creates and deletes a temporary operator-only Worker. Do not run a full GOD review solely to verify configuration.
 
 ## Backup caution
 

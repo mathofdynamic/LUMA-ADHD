@@ -17,7 +17,7 @@ function logScheduleTick(controller: ScheduledController): void {
     JSON.stringify({
       event: "foundation_schedule_tick",
       cron: controller.cron,
-      phase: "08-hardening-deployment",
+      phase: "post-v1-openai-luna-migration",
     }),
   );
 }

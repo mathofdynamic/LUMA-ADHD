@@ -5,6 +5,8 @@ import {
   OpenAIProvider,
   DEFAULT_NEBULA_MODEL,
   VERIFIED_NEBULA_BASE_URL,
+  VERIFIED_OPENAI_BASE_URL,
+  VERIFIED_OPENAI_MODEL,
   type LLMProvider,
   type LLMReasoningEffort,
 } from "../llm";
@@ -20,6 +22,11 @@ import { GodScheduler } from "../god/scheduler";
 
 export interface AgentRuntimeEnvironment {
   readonly DB: D1Database;
+  readonly OPENAI_API_KEY?: string;
+  readonly NORMAL_AGENT_PROVIDER?: string;
+  readonly NORMAL_AGENT_BASE_URL?: string;
+  readonly NORMAL_AGENT_MODEL?: string;
+  readonly NORMAL_AGENT_REASONING_EFFORT?: string;
   readonly NEBULA_API_KEY?: string;
   readonly NEBULA_BASE_URL?: string;
   readonly NEBULA_MODEL?: string;
@@ -45,6 +52,40 @@ export interface AgentRuntimeEnvironment {
 
 const GOD_REASONING_EFFORTS: readonly LLMReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+export interface ResolvedNormalAgentConfig {
+  readonly provider: "openai" | "nebula";
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly reasoningEffort?: LLMReasoningEffort;
+  readonly configured: boolean;
+}
+
+export function resolveOpenAIKey(env: Pick<AgentRuntimeEnvironment, "OPENAI_API_KEY" | "GOD_API_KEY">): string | undefined {
+  return env.OPENAI_API_KEY?.trim() || env.GOD_API_KEY?.trim() || undefined;
+}
+
+export function resolveNormalAgentConfig(env: AgentRuntimeEnvironment): ResolvedNormalAgentConfig {
+  const provider = env.NORMAL_AGENT_PROVIDER?.trim().toLowerCase() || "nebula";
+  if (provider === "openai") {
+    return {
+      provider: "openai",
+      baseUrl: env.NORMAL_AGENT_BASE_URL?.trim() || VERIFIED_OPENAI_BASE_URL,
+      model: env.NORMAL_AGENT_MODEL?.trim() || VERIFIED_OPENAI_MODEL,
+      reasoningEffort: parseGodReasoningEffort(env.NORMAL_AGENT_REASONING_EFFORT) ?? "medium",
+      configured: resolveOpenAIKey(env) !== undefined,
+    };
+  }
+  if (provider === "nebula") {
+    return {
+      provider: "nebula",
+      baseUrl: env.NEBULA_BASE_URL?.trim() || VERIFIED_NEBULA_BASE_URL,
+      model: env.NEBULA_MODEL?.trim() || DEFAULT_NEBULA_MODEL,
+      configured: Boolean(env.NEBULA_API_KEY?.trim()),
+    };
+  }
+  throw new Error(`unsupported normal agent provider: ${provider}`);
+}
+
 export function parseGodReasoningEffort(value: string | undefined): LLMReasoningEffort | undefined {
   const normalized = value?.trim().toLowerCase() as LLMReasoningEffort | undefined;
   return normalized !== undefined && GOD_REASONING_EFFORTS.includes(normalized) ? normalized : undefined;
@@ -52,9 +93,10 @@ export function parseGodReasoningEffort(value: string | undefined): LLMReasoning
 
 function createConfiguredGodProvider(env: AgentRuntimeEnvironment): LLMProvider | undefined {
   if (env.GOD_PROVIDER?.trim().toLowerCase() !== "openai") return undefined;
-  if (!env.GOD_API_KEY?.trim() || !env.GOD_MODEL?.trim()) return undefined;
+  const apiKey = resolveOpenAIKey(env);
+  if (!apiKey || !env.GOD_MODEL?.trim()) return undefined;
   return new OpenAIProvider({
-    apiKey: env.GOD_API_KEY,
+    apiKey,
     baseUrl: env.GOD_BASE_URL,
     model: env.GOD_MODEL,
     maxAttempts: 1,
@@ -70,12 +112,23 @@ export function createAgentRuntime(
   options?: { readonly provider?: LLMProvider; readonly now?: () => string; readonly rng?: () => number },
 ): AgentRuntimeService {
   const repositories = createRepositories(env.DB);
-  const provider = options?.provider ?? new NebulaProvider({
-    apiKey: env.NEBULA_API_KEY ?? "",
-    baseUrl: env.NEBULA_BASE_URL || VERIFIED_NEBULA_BASE_URL,
-    model: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL,
+  const normalConfig = resolveNormalAgentConfig(env);
+  const provider = options?.provider ?? (normalConfig.provider === "openai"
+    ? new OpenAIProvider({
+      apiKey: resolveOpenAIKey(env) ?? "",
+      baseUrl: normalConfig.baseUrl,
+      model: normalConfig.model,
+    })
+    : new NebulaProvider({
+      apiKey: env.NEBULA_API_KEY ?? "",
+      baseUrl: normalConfig.baseUrl,
+      model: normalConfig.model,
+    }));
+  const memory = createMemoryServices(repositories, {
+    provider,
+    modelKey: normalConfig.model,
+    reasoningEffort: normalConfig.reasoningEffort,
   });
-  const memory = createMemoryServices(repositories, { provider, modelKey: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL });
   const reputation = new ReputationService({ repositories, now: options?.now });
   const telegramConfig = parseTelegramConfig(env);
   const telegram = createTelegramApplication({
@@ -89,7 +142,8 @@ export function createAgentRuntime(
     repositories,
     provider,
     telegram,
-    modelKey: env.NEBULA_MODEL || DEFAULT_NEBULA_MODEL,
+    modelKey: normalConfig.model,
+    reasoningEffort: normalConfig.reasoningEffort,
     memory,
     reputation,
     now: options?.now,
@@ -115,8 +169,9 @@ export function createGodReviewService(
   const repositories = createRepositories(env.DB);
   const reputation = new ReputationService({ repositories, now: options.now });
   const memory = createMemoryServices(repositories, {
-    provider: options.provider,
+    provider,
     modelKey: env.GOD_MODEL,
+    reasoningEffort: parseGodReasoningEffort(env.GOD_REASONING_EFFORT),
   });
   const telegramConfig = parseTelegramConfig(env);
   const telegram = createTelegramApplication({

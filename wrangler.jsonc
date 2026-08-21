@@ -15,14 +15,18 @@
   // intentionally absent; use .dev.vars locally and Wrangler secrets later.
   "vars": {
     "LUMA_ENVIRONMENT": "production",
-    "LUMA_PHASE": "08-hardening-deployment",
+    "LUMA_PHASE": "post-v1-openai-luna-migration",
     "ADMIN_SESSION_TTL_SECONDS": "43200",
+    "NORMAL_AGENT_PROVIDER": "openai",
+    "NORMAL_AGENT_BASE_URL": "https://api.openai.com/v1",
+    "NORMAL_AGENT_MODEL": "gpt-5.6-luna",
+    "NORMAL_AGENT_REASONING_EFFORT": "medium",
     "NEBULA_BASE_URL": "https://nebula-free-llm.nebula-ai-company.workers.dev/v1",
     "NEBULA_MODEL": "auto",
     "GOD_PROVIDER": "openai",
     "GOD_BASE_URL": "https://api.openai.com/v1",
-    "GOD_MODEL": "gpt-5.6-sol",
-    "GOD_REASONING_EFFORT": "high"
+    "GOD_MODEL": "gpt-5.6-luna",
+    "GOD_REASONING_EFFORT": "xhigh"
   },
 
   "d1_databases": [
@@ -71,6 +75,6 @@
   // operator bootstrap/deployment tooling for live values.
   // Runtime secret names (never add them to vars):
   // TELEGRAM_WEBHOOK_SECRET, TELEGRAM_*_BOT_TOKEN, NEBULA_API_KEY,
-  // GOD_API_KEY, ADMIN_AUTH_SECRET.
+  // OPENAI_API_KEY, GOD_API_KEY, ADMIN_AUTH_SECRET.
   // Optional Browser Rendering is intentionally not bound in Phase 00.
 }
