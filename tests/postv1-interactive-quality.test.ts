@@ -365,8 +365,27 @@ describe("post-v1 interactive discussion quality", () => {
     expect(TELEGRAM_PRESENTATION_GUIDANCE).not.toContain("Activation Rate");
     expect(TELEGRAM_PRESENTATION_GUIDANCE).not.toContain("onboarding");
     expect(social.systemPrompt).toContain("SOCIAL / ACKNOWLEDGEMENT FAST PATH");
+    expect(social.systemPrompt).toContain("Social presentation is plain and natural");
     expect(social.systemPrompt).not.toContain("bounded_retrieval_context");
     expect(social.systemPrompt.length).toBeLessThan(work.systemPrompt.length);
+  });
+
+  it("teaches complexity-aware Telegram presentation without semantic priming", () => {
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("SOCIAL / CASUAL");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("SIMPLE ANSWER");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("MULTI-POINT ANSWER");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("ANALYTICAL / STRATEGIC");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("TECHNICAL");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("IMAGE ANSWERS");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("<u>");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("<s>");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("<pre>");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("<tg-spoiler>");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("three or more distinct points");
+    expect(TELEGRAM_PRESENTATION_GUIDANCE).toContain("Markdown markers");
+    for (const banned of ["onboarding", "Activation Rate", "first value", "pricing", "retention", "LUMA strategy"]) {
+      expect(TELEGRAM_PRESENTATION_GUIDANCE.toLowerCase()).not.toContain(banned.toLowerCase());
+    }
   });
 
   it("supports a bounded social selection mode without phase-driven strategy routing", () => {

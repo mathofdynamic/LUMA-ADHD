@@ -117,6 +117,36 @@ const results: EvalResult[] = [];
 }
 
 {
+  const socialPrompt = buildAgentPrompt({
+    agent: agent("agent-customer", "customer_experience"),
+    specialties: [{ domain: "customer_experience", description: "user experience", priority: 1, isPrimary: true }],
+    interests: [],
+    thread: { id: "presentation-social", title: "Greeting", state: "open", priority: 50, summary: null } as never,
+    wakeReason: "human_message",
+    mode: "social",
+    recentMessages: [],
+    conversationFocus: buildConversationFocus({ thread: { title: "Greeting", summary: null } as never, wakeMessage: null, recentMessages: [] }),
+  });
+  results.push(evaluate("telegram-presentation-policy", [
+    assertion(TELEGRAM_PRESENTATION_GUIDANCE.includes("MULTI-POINT ANSWER"), "multi-point answers have an explicit scan-friendly mode"),
+    assertion(TELEGRAM_PRESENTATION_GUIDANCE.includes("IMAGE ANSWERS"), "image answers may use neutral visual-observation structure"),
+    assertion(TELEGRAM_PRESENTATION_GUIDANCE.includes("<pre>"), "technical code blocks are documented only for technical material"),
+    assertion(TELEGRAM_PRESENTATION_GUIDANCE.includes("Markdown markers"), "Markdown leakage remains forbidden"),
+    assertion(socialPrompt.systemPrompt.includes("Social presentation is plain and natural"), "social mode discourages unnecessary formatting"),
+    assertion(!TELEGRAM_PRESENTATION_GUIDANCE.toLowerCase().includes("activation rate"), "generic formatting guidance remains content-neutral"),
+  ], {
+    turnCount: 1,
+    selectedAgents: ["agent-customer"],
+    publicMessageCount: 1,
+    jobsCreated: 1,
+    terminalReason: "complexity_aware_presentation_policy",
+  }, [
+    "PASS: formatting hierarchy is encouraged only when response complexity warrants it",
+    "PASS: presentation policy does not inject product or business topics",
+  ]));
+}
+
+{
   const oldHuman = { id: "old", threadId: "thread", authorType: "human", authorUserId: "human", authorAgentId: null, contentText: "تحلیل قدیمی محصول", createdAt: "2026-08-17T05:00:00.000Z", replyToMessageId: null } as never;
   const oldAgent = { id: "old-agent", threadId: "thread", authorType: "agent", authorUserId: null, authorAgentId: "agent-product", contentText: "تحلیل strategic قدیمی", createdAt: "2026-08-17T05:01:00.000Z", replyToMessageId: null } as never;
   const greeting = { id: "greeting", threadId: "thread", authorType: "human", authorUserId: "human", authorAgentId: null, contentText: "سلام", createdAt: "2026-08-21T05:00:00.000Z", replyToMessageId: null } as never;

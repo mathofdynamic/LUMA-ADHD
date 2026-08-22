@@ -56,6 +56,30 @@ metadata remain while the Agent is prevented from making a positive vision claim
 Vision content is current-turn evidence. It does not grant permission to identify
 real people or invent details outside the visible image.
 
+## Telegram presentation
+
+Normal Agent output uses the same bounded `SPEAK` contract and is rendered with
+the safe Telegram HTML sanitizer. Presentation is chosen by complexity:
+
+- social or casual messages stay plain and natural;
+- simple answers use one or two short paragraphs;
+- three or more independent observations use a short opening plus bullets or
+  short sections;
+- analytical answers may use concise content-derived labels such as a summary,
+  risk, or proposal;
+- technical identifiers, code, logs, and configuration may use `<code>` or
+  `<pre>`; and
+- a specific prior statement may use `<blockquote>` when quoting materially
+  helps.
+
+The safe contract includes `<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`,
+`<blockquote>`, safe `https` links, and `<tg-spoiler>`. Markdown remains
+forbidden. Formatting is for hierarchy and mobile scanability, not decoration;
+greetings do not become reports and Agents do not use a fixed heading template.
+Image answers may use the same neutral bullet structure when several visible
+observations matter. The presentation policy contains no business-topic examples
+so formatting guidance cannot prime unrelated content.
+
 ## Shared group awareness
 
 Telegram is the visible shared workplace, but not every Agent receives an LLM turn

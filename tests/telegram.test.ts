@@ -276,6 +276,22 @@ describe("Phase 02 Telegram outbound projection", () => {
     expect(renderTelegramText(markup, "telegram_html")).toEqual(["<b>Bold</b> &amp; <i>italic</i>"]);
   });
 
+  it("preserves the full documented safe Telegram presentation contract", () => {
+    const markup = [
+      "<b>label</b>",
+      "<i>emphasis</i>",
+      "<u>underlined</u>",
+      "<s>removed</s>",
+      "<code>identifier</code>",
+      "<pre>output</pre>",
+      "<blockquote>quoted text</blockquote>",
+      "<a href=\"https://example.com\">link</a>",
+      "<tg-spoiler>hidden</tg-spoiler>",
+    ].join(" ");
+
+    expect(renderTelegramText(markup, "telegram_html")).toEqual([markup]);
+  });
+
   it("bolds only the exact participant name in Persian direct address", () => {
     const address = "<b>سارا</b>، پیشنهادت درباره آنبوردینگ خوبه، ولی یک ریسک داریم.";
 

@@ -24,7 +24,8 @@
     "nebula:smoke": "esbuild scripts/nebula-smoke.ts --bundle --platform=node --format=esm --outfile=.nebula-smoke.bundle.mjs && node .nebula-smoke.bundle.mjs",
     "god:smoke": "esbuild scripts/openai-god-smoke.ts --bundle --platform=node --format=esm --outfile=.openai-god-smoke.bundle.mjs && node .openai-god-smoke.bundle.mjs",
     "openai:luna:smoke": "esbuild scripts/openai-luna-smoke.ts --bundle --platform=node --format=esm --outfile=.openai-luna-smoke.bundle.mjs && node .openai-luna-smoke.bundle.mjs",
-    "openai:luna:vision-smoke": "esbuild scripts/openai-luna-vision-smoke.ts --bundle --platform=node --format=esm --outfile=.openai-luna-vision-smoke.bundle.mjs && node .openai-luna-vision-smoke.bundle.mjs"
+    "openai:luna:vision-smoke": "esbuild scripts/openai-luna-vision-smoke.ts --bundle --platform=node --format=esm --outfile=.openai-luna-vision-smoke.bundle.mjs && node .openai-luna-vision-smoke.bundle.mjs",
+    "openai:luna:presentation-smoke": "esbuild scripts/openai-luna-presentation-smoke.ts --bundle --platform=node --format=esm --outfile=.openai-luna-presentation-smoke.bundle.mjs && node .openai-luna-presentation-smoke.bundle.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
