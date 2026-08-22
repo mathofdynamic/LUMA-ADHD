@@ -9,6 +9,8 @@ import type {
   TelegramTransport,
   TelegramUpdateEnvelope,
 } from "./types";
+import type { JobRecord } from "../database/types";
+import { TelegramRollCallService, type TelegramRollCallResult } from "./roll-call";
 
 type TelegramRepositories = ReturnType<typeof createRepositories>;
 
@@ -31,11 +33,23 @@ export class TelegramApplicationService {
   private readonly inbound: TelegramInboundService;
   private readonly outbound: TelegramOutboundService | null;
 
-  constructor(dependencies: TelegramApplicationDependencies) {
+  constructor(private readonly dependencies: TelegramApplicationDependencies) {
     this.inbound = new TelegramInboundService(dependencies);
     this.outbound = dependencies.transport
       ? new TelegramOutboundService({ ...dependencies, transport: dependencies.transport })
       : null;
+  }
+
+  async runRollCall(job: JobRecord): Promise<TelegramRollCallResult> {
+    if (!this.outbound) {
+      throw new TelegramConfigurationError("an outbound Telegram transport has not been configured");
+    }
+    return new TelegramRollCallService({
+      repositories: this.dependencies.repositories,
+      config: this.dependencies.config,
+      projectAgentMessage: (input) => this.projectAgentMessage(input),
+      now: this.dependencies.now,
+    }).run(job);
   }
 
   ingest(envelope: TelegramUpdateEnvelope): Promise<TelegramInboundResult> {
@@ -63,4 +77,6 @@ export * from "./config";
 export * from "./format";
 export * from "./normalize";
 export * from "./transport";
+export * from "./media";
+export * from "./roll-call";
 export * from "./types";

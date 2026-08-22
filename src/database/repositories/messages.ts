@@ -2,7 +2,7 @@ import type { DatabaseClient } from "../client";
 import { createId, nowIso } from "../ids";
 import { NotFoundError, ValidationError } from "../errors";
 import { toJsonObject, toNullableString } from "../rows";
-import { encodeObject, requireLimit, requireNonEmpty } from "../validation";
+import { encodeObject, requireLimit } from "../validation";
 import type {
   CreateMessageInput,
   MessageRecord,
@@ -59,7 +59,14 @@ export class MessageRepository {
 
   async create(input: CreateMessageInput): Promise<MessageRecord> {
     const id = input.id ?? createId("message");
-    const contentText = requireNonEmpty(input.contentText, "message.contentText");
+    const contentText = input.contentText.trim();
+    const attachment = input.metadata?.attachment;
+    const attachmentObject = typeof attachment === "object" && attachment !== null && !Array.isArray(attachment)
+      ? attachment as { readonly type?: unknown }
+      : null;
+    if (contentText.length === 0 && attachmentObject?.type !== "image") {
+      throw new ValidationError("message.contentText must be non-empty unless an image attachment is present");
+    }
     const hasUser = input.authorUserId !== undefined;
     const hasAgent = input.authorAgentId !== undefined;
 

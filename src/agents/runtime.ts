@@ -33,6 +33,7 @@ import {
   LLMProviderError,
   normalizeProviderError,
   type LLMGenerateResponse,
+  type LLMMessage,
   type LLMProvider,
   type LLMReasoningEffort,
 } from "../llm";
@@ -53,14 +54,23 @@ import {
   isLightweightInteractionIntent,
   type ConversationFocus,
 } from "./conversation-focus";
+import {
+  enforceVisionCapabilityTruth,
+  isImageInspectionQuestion,
+  type AgentCapabilityManifest,
+  type AgentGroupStateSnapshot,
+  type CurrentImageFetchStatus,
+} from "./capabilities";
 import { countDailyAutonomyJobs, nextUtcDay } from "../autonomy-budgets";
+import type { TelegramMediaFetcher } from "../telegram/media";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
 export interface AgentRuntimeDependencies {
   readonly repositories: RuntimeRepositories;
   readonly provider: LLMProvider;
-  readonly telegram?: Pick<TelegramApplicationService, "projectAgentMessage">;
+  readonly telegram?: Pick<TelegramApplicationService, "projectAgentMessage" | "runRollCall">;
+  readonly media?: Pick<TelegramMediaFetcher, "fetchImage">;
   readonly modelKey: string;
   readonly reasoningEffort?: LLMReasoningEffort;
   readonly memory?: MemoryServices;
@@ -97,6 +107,9 @@ interface TurnContext {
   readonly coveredDomains: readonly string[];
   readonly contributionRole: "CONTRIBUTE" | "SYNTHESIZE";
   readonly priorBurstContributions: readonly string[];
+  readonly capabilityManifest: AgentCapabilityManifest;
+  readonly visionInput?: { readonly dataUrl: string; readonly mimeType: string; readonly byteLength: number };
+  readonly groupState: AgentGroupStateSnapshot;
 }
 
 interface TurnExecutionResult {
@@ -122,9 +135,32 @@ function numberField(value: JsonValue | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+interface ResolvedVisionInput {
+  readonly present: boolean;
+  readonly fetchStatus: CurrentImageFetchStatus;
+  readonly dataUrl?: string;
+  readonly mimeType?: string;
+  readonly byteLength?: number;
+  readonly errorCategory?: string;
+}
+
+function stringArrayField(payload: JsonObject, key: string): readonly string[] {
+  const value = payload[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
 function objectField(payload: JsonObject, key: string): JsonObject {
   const value = payload[key];
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as JsonObject : {};
+}
+
+function imageAttachmentFromMessage(message: MessageRecord | null): JsonObject | null {
+  const attachment = message?.metadata?.attachment;
+  if (typeof attachment !== "object" || attachment === null || Array.isArray(attachment)) return null;
+  const value = attachment as JsonObject;
+  return value.type === "image" && typeof value.telegramFileId === "string" ? value : null;
 }
 
 function safeErrorSummary(error: unknown): string {
@@ -137,6 +173,17 @@ function safeErrorSummary(error: unknown): string {
     });
   }
   return JSON.stringify({ kind: "runtime", message: String(error).slice(0, 300) });
+}
+
+function capabilityMetadata(manifest: AgentCapabilityManifest): JsonObject {
+  return {
+    attachmentPresent: manifest.currentImagePresent,
+    attachmentType: manifest.currentImagePresent ? "image" : null,
+    imageDeliveredToModel: manifest.currentImageDeliveredToModel,
+    imageFetchStatus: manifest.currentImageFetchStatus,
+    imageCount: manifest.currentImageCount,
+    visionModelSupported: manifest.visionModelSupported,
+  };
 }
 
 function isRetryableProviderError(error: unknown): boolean {
@@ -209,6 +256,38 @@ export class AgentRuntimeService {
   }
 
   async processJob(job: JobRecord): Promise<RuntimeBurstResult | null> {
+    if (job.jobType === "telegram.roll_call") {
+      if (!this.dependencies.telegram) return null;
+      const result = await this.dependencies.telegram.runRollCall(job);
+      return {
+        jobId: job.id,
+        threadId: stringField(job.payload, "threadId") ?? "",
+        turns: 0,
+        completedTurns: 0,
+        publicMessages: result.respondedAgentIds.length,
+        waits: 0,
+        stoppedReason: result.failedAgentIds.length > 0 ? "roll_call_projection_partial_failure" : "roll_call_completed",
+      };
+    }
+
+    if (job.jobType === "telegram.explicit_all_agents") {
+      const messageId = stringField(job.payload, "messageId");
+      const threadId = stringField(job.payload, "threadId");
+      if (!messageId || !threadId) throw new Error("explicit all-Agent job is missing messageId or threadId");
+      const settings = await this.runtimeSettings;
+      return this.runBoundedBurst({
+        job,
+        messageId,
+        threadId,
+        addressedAgentId: stringField(job.payload, "addressedAgentId"),
+        wakeReason: "human_message",
+        mode: "explicit_all_agents",
+        maxTurns: 8,
+        settings,
+        targetAgentIds: stringArrayField(job.payload, "targetAgentIds"),
+      });
+    }
+
     if (job.jobType === "telegram.interactive_message") {
       const messageId = stringField(job.payload, "messageId");
       const threadId = stringField(job.payload, "threadId");
@@ -378,9 +457,10 @@ export class AgentRuntimeService {
     readonly addressedAgentId?: string | null;
     readonly preferredAgentId?: string | null;
     readonly wakeReason: string;
-    readonly mode: "interactive" | "ambient" | "deep_work";
+    readonly mode: "interactive" | "ambient" | "deep_work" | "explicit_all_agents";
     readonly maxTurns: number;
     readonly settings: EffectiveRuntimeSettings;
+    readonly targetAgentIds?: readonly string[];
   }): Promise<RuntimeBurstResult> {
     const completedEvent = await this.dependencies.repositories.events
       .getByIdempotencyKey(`runtime-burst-completed:${input.job.id}`)
@@ -405,6 +485,7 @@ export class AgentRuntimeService {
       ? await this.dependencies.repositories.messages.getById(wakeMessage.replyToMessageId).catch(() => null)
       : null;
     const profiles = await this.loadProfiles();
+    const visionInput = await this.resolveVisionInput(wakeMessage, anchorMessage);
     const requestedAgentIds = await this.loadRequestedAgentIds(
       input.threadId,
       input.mode === "interactive" ? anchorMessage?.createdAt ?? wakeMessage?.createdAt ?? null : null,
@@ -436,7 +517,14 @@ export class AgentRuntimeService {
       input.threadId,
       input.settings.recentMessageContextCount,
     )).filter((message) => message.visibility !== "private");
-    let conversationFocus = buildConversationFocus({ thread, wakeMessage, anchorMessage, recentMessages });
+    const [threadEvents, recentRollCalls] = await Promise.all([
+      this.dependencies.repositories.events.listForThread(input.threadId, 100),
+      thread.chatId
+        ? this.dependencies.repositories.events.listRecentByTypeForChat(thread.chatId, "telegram.roll_call_completed", 1)
+        : Promise.resolve([]),
+    ]);
+    const lastRollCall = recentRollCalls[0] ?? [...threadEvents].reverse().find((event) => event.eventType === "telegram.roll_call_completed");
+    let conversationFocus = buildConversationFocus({ thread, wakeMessage, anchorMessage, recentMessages, currentImagePresent: visionInput.present });
     const effectiveMode = input.mode === "interactive" && isLightweightInteractionIntent(conversationFocus.interactionIntent)
       ? "social" as const
       : input.mode;
@@ -444,8 +532,18 @@ export class AgentRuntimeService {
       ? FOUNDATION_GUARDRAILS.interactiveBurstMaxTurns
       : effectiveMode === "deep_work"
         ? FOUNDATION_GUARDRAILS.deepWorkMaxTurns
+        : effectiveMode === "explicit_all_agents"
+          ? 8
         : 1;
-    const maxTurns = Math.min(Math.max(0, input.maxTurns), effectiveHardTurnLimit);
+    const targetAgentIds = input.mode === "explicit_all_agents"
+      ? [...new Set((input.targetAgentIds && input.targetAgentIds.length > 0 ? input.targetAgentIds : profiles.map((profile) => profile.agent.id))
+        .filter((agentId) => profiles.some((profile) => profile.agent.id === agentId)))]
+      : [];
+    const maxTurns = Math.min(
+      Math.max(0, input.maxTurns),
+      effectiveHardTurnLimit,
+      input.mode === "explicit_all_agents" ? targetAgentIds.length : Number.POSITIVE_INFINITY,
+    );
     const existingTurns = await this.dependencies.repositories.agentTurns.listByJob(input.job.id, Math.max(1, maxTurns));
 
     let turnCount = existingTurns.length;
@@ -462,6 +560,10 @@ export class AgentRuntimeService {
     const recentAgentIds = existingTurns
       .map((turn) => turn.agentId)
       .filter((agentId): agentId is string => typeof agentId === "string");
+    const respondedAgentIds = existingTurns
+      .filter((turn) => turn.outputMessageId !== null)
+      .map((turn) => turn.agentId)
+      .filter((agentId): agentId is string => typeof agentId === "string");
     const requested = [...requestedAgentIds];
     const coveredDomains = new Set<string>();
     const priorBurstContributions: string[] = [];
@@ -472,7 +574,7 @@ export class AgentRuntimeService {
     }
 
     while (turnCount < maxTurns) {
-      if (input.mode === "interactive") {
+      if (input.mode === "interactive" || input.mode === "explicit_all_agents") {
         const superseding = await this.findSupersedingHumanMessage(thread, wakeMessage);
         if (superseding) {
           stoppedReason = "superseded_by_new_human_boundary";
@@ -492,18 +594,19 @@ export class AgentRuntimeService {
         stoppedReason = "public_message_budget_exhausted";
         break;
       }
-      if (waits >= 2 && turnCount > 0) {
+      if (effectiveMode !== "explicit_all_agents" && waits >= 2 && turnCount > 0) {
         stoppedReason = "two_bounded_waits";
         break;
       }
 
-      conversationFocus = buildConversationFocus({ thread, wakeMessage, anchorMessage, recentMessages });
+      conversationFocus = buildConversationFocus({ thread, wakeMessage, anchorMessage, recentMessages, currentImagePresent: visionInput.present });
       const contributionRole = effectiveMode === "interactive"
         && conversationFocus.isBroadQuestion
         && coveredDomains.size >= 2
         && turnCount >= 2
         ? "SYNTHESIZE" as const
         : "CONTRIBUTE" as const;
+      const explicitTargetAgentId = effectiveMode === "explicit_all_agents" ? targetAgentIds[turnCount] : undefined;
       const scored = scoreCandidates({
         profiles,
         messageText: conversationFocus.selectionQuery,
@@ -522,14 +625,22 @@ export class AgentRuntimeService {
         contributionRole,
         ambientOpportunityIntervalMinutes: input.settings.ambientOpportunityIntervalMinutes,
         rng: this.rng,
+        eligibleAgentIds: explicitTargetAgentId === undefined ? undefined : [explicitTargetAgentId],
       });
-      const decision = chooseCandidateFromScores(scored, {
-        lastAgentId: recentAgentIds.at(-1),
-        addressedAgentId: input.addressedAgentId,
-        turnIndex: turnCount,
-        rng: this.rng,
-        mode: effectiveMode,
-      });
+      const decision = explicitTargetAgentId !== undefined
+        ? {
+            candidate: scored[0] ?? null,
+            usedExploration: false,
+            explorationPool: scored.map((item) => item.agentId),
+            reason: "explicit_all_agents_broadcast",
+          }
+        : chooseCandidateFromScores(scored, {
+          lastAgentId: recentAgentIds.at(-1),
+          addressedAgentId: input.addressedAgentId,
+          turnIndex: turnCount,
+          rng: this.rng,
+          mode: effectiveMode,
+        });
       const candidate = decision.candidate;
       if (candidate === null) {
         stoppedReason = "no_candidate";
@@ -615,6 +726,17 @@ export class AgentRuntimeService {
         coveredDomains: [...coveredDomains],
         contributionRole,
         priorBurstContributions: [...priorBurstContributions],
+        capabilityManifest: this.capabilityManifest(visionInput),
+        ...(visionInput.dataUrl === undefined || visionInput.mimeType === undefined || visionInput.byteLength === undefined
+          ? {}
+          : { visionInput: { dataUrl: visionInput.dataUrl, mimeType: visionInput.mimeType, byteLength: visionInput.byteLength } }),
+          groupState: this.groupStateSnapshot({
+            profiles,
+            mode: effectiveMode,
+            invokedAgentIds: [...recentAgentIds, candidate.agentId],
+            respondedAgentIds,
+            lastRollCall,
+          }),
       });
       await this.dependencies.repositories.threads.incrementTurnUsage(input.threadId, this.now());
       turnCount += 1;
@@ -632,6 +754,7 @@ export class AgentRuntimeService {
       if (result.wait) waits += 1;
       if (result.action !== null) completedTurns += 1;
       if (result.outputMessageId) {
+        respondedAgentIds.push(profile.agent.id);
         publicMessages += 1;
         replyToMessageId = result.outputMessageId;
         const outputMessage = await this.dependencies.repositories.messages
@@ -693,6 +816,84 @@ export class AgentRuntimeService {
       publicMessages,
       waits,
       stoppedReason,
+    };
+  }
+
+  private async resolveVisionInput(
+    wakeMessage: MessageRecord | null,
+    anchorMessage: MessageRecord | null,
+  ): Promise<ResolvedVisionInput> {
+    const attachment = imageAttachmentFromMessage(wakeMessage) ?? imageAttachmentFromMessage(anchorMessage);
+    if (!attachment) {
+      return { present: false, fetchStatus: "not_present" };
+    }
+    if (this.dependencies.provider.name !== "openai") {
+      return { present: true, fetchStatus: "unavailable", errorCategory: "provider_vision_unsupported" };
+    }
+    if (!this.dependencies.media) {
+      return { present: true, fetchStatus: "unavailable", errorCategory: "media_fetch_unconfigured" };
+    }
+    const result = await this.dependencies.media.fetchImage({
+      fileId: String(attachment.telegramFileId),
+      declaredMimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : undefined,
+    });
+    if (result.status !== "available" || !result.dataUrl || !result.mimeType || result.byteLength === undefined) {
+      return {
+        present: true,
+        fetchStatus: result.status,
+        errorCategory: result.errorCategory,
+      };
+    }
+    return {
+      present: true,
+      fetchStatus: "available",
+      dataUrl: result.dataUrl,
+      mimeType: result.mimeType,
+      byteLength: result.byteLength,
+    };
+  }
+
+  private capabilityManifest(visionInput: ResolvedVisionInput): AgentCapabilityManifest {
+    const visionModelSupported = this.dependencies.provider.name === "openai";
+    return {
+      canSearchOwnFiles: this.dependencies.memory !== undefined,
+      canSearchSharedFiles: this.dependencies.memory !== undefined,
+      canUseOfficialLumaKnowledge: this.dependencies.memory !== undefined,
+      canRequestAgent: true,
+      canRequestHuman: true,
+      canCreateFiles: this.dependencies.memory !== undefined,
+      canCreateDiagram: true,
+      visionModelSupported,
+      currentImagePresent: visionInput.present,
+      currentImageFetchStatus: visionInput.fetchStatus,
+      currentImageDeliveredToModel: visionInput.dataUrl !== undefined && visionModelSupported,
+      currentImageCount: visionInput.dataUrl !== undefined && visionModelSupported ? 1 : 0,
+    };
+  }
+
+  private groupStateSnapshot(input: {
+    readonly profiles: readonly AgentCandidateProfile[];
+    readonly mode: string;
+    readonly invokedAgentIds: readonly string[];
+    readonly respondedAgentIds: readonly string[];
+    readonly lastRollCall?: { readonly payload: JsonObject };
+  }): AgentGroupStateSnapshot {
+    const activeNormalAgents = input.profiles.map((profile) => profile.agent.id);
+    const invokedAgents = [...new Set(input.invokedAgentIds.filter((agentId) => activeNormalAgents.includes(agentId)))];
+    const respondedAgents = [...new Set(input.respondedAgentIds.filter((agentId) => activeNormalAgents.includes(agentId)))];
+    return {
+      activeNormalAgents,
+      currentInteractionMode: input.mode,
+      invokedAgents,
+      respondedAgents,
+      pendingAgents: activeNormalAgents.filter((agentId) => !invokedAgents.includes(agentId)),
+      ...(input.lastRollCall
+        ? {
+            lastRollCallTargetedAgents: stringArrayField(input.lastRollCall.payload, "targetedAgentIds"),
+            lastRollCallRespondedAgents: stringArrayField(input.lastRollCall.payload, "respondedAgentIds"),
+            lastRollCallFailedAgents: stringArrayField(input.lastRollCall.payload, "failedAgentIds"),
+          }
+        : {}),
     };
   }
 
@@ -845,7 +1046,9 @@ export class AgentRuntimeService {
       ? await this.dependencies.repositories.users.getById(context.wakeMessage.authorUserId).catch(() => null)
       : null;
     const query = context.conversationFocus.retrievalQuery || thread.summary || thread.title;
-    const retrievalSkipped = isLightweightInteractionIntent(context.conversationFocus.interactionIntent);
+    const retrievalSkipped = isLightweightInteractionIntent(context.conversationFocus.interactionIntent)
+      || isImageInspectionQuestion(context.conversationFocus.primaryQuery)
+      || (context.conversationFocus.currentImagePresent && context.conversationFocus.retrievalQuery.length === 0);
     const emptyContextPack: ContextPack = {
       query: "",
       items: [],
@@ -899,10 +1102,12 @@ export class AgentRuntimeService {
       ...(human ? [{ id: human.id, displayName: human.displayName, kind: "human" as const }] : []),
     ];
     let acquisitionContext: string[] = [];
-    const promptMode: AgentPromptMode = retrievalSkipped
+    const promptMode: AgentPromptMode = isLightweightInteractionIntent(context.conversationFocus.interactionIntent)
       ? "social"
       : context.turn.metadata.mode === "deep_work"
         ? "deep_work"
+        : context.turn.metadata.mode === "explicit_all_agents"
+          ? "explicit_all_agents"
         : context.turn.metadata.mode === "ambient"
           ? "ambient"
           : "interactive";
@@ -919,6 +1124,8 @@ export class AgentRuntimeService {
       conversationFocus: context.conversationFocus,
       coveredDomains: context.coveredDomains,
       contributionRole: context.contributionRole,
+      capabilityManifest: context.capabilityManifest,
+      groupState: context.groupState,
       participants,
       humanDisplayName: human?.displayName,
       reputationContext: {
@@ -935,17 +1142,28 @@ export class AgentRuntimeService {
     let acquisitionOperations = 0;
     const callProvider = async (
       systemPrompt: string,
-      messages: readonly { readonly role: "user" | "assistant"; readonly content: string }[],
+      messages: readonly LLMMessage[],
       usageSuffix: string,
       maxOutputTokens: number,
       metadata: JsonObject,
     ): Promise<LLMGenerateResponse> => {
       const startedAt = Date.now();
       try {
+        const providerMessages: readonly LLMMessage[] = context.visionInput
+          ? messages.map((message, index) => index === 0
+            ? {
+                ...message,
+                content: [
+                  ...(typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content),
+                  { type: "image_data" as const, dataUrl: context.visionInput!.dataUrl, detail: "auto" as const },
+                ],
+              }
+            : message)
+          : messages;
         const generated = await this.dependencies.provider.generate({
           modelKey: this.dependencies.modelKey,
           systemPrompt,
-          messages,
+          messages: providerMessages,
           temperature: 0,
           maxOutputTokens,
           reasoningEffort: this.dependencies.reasoningEffort,
@@ -959,7 +1177,11 @@ export class AgentRuntimeService {
             }
             : {}),
           timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
-          metadata: Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])),
+          metadata: Object.fromEntries(Object.entries({
+            ...metadata,
+            imageDeliveredToModel: context.capabilityManifest.currentImageDeliveredToModel,
+            imageFetchStatus: context.capabilityManifest.currentImageFetchStatus,
+          }).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])),
         });
         await this.recordUsage(`provider-usage:${turn.id}:${usageSuffix}`, context.job, turn, generated, undefined, Date.now() - startedAt);
         return generated;
@@ -1156,6 +1378,7 @@ export class AgentRuntimeService {
           retrieval: retrievalTelemetry,
           grounding: groundingMetadata(grounding),
           acquisitionOperations,
+          capabilities: capabilityMetadata(context.capabilityManifest),
         });
         return { action: null, outputMessageId: undefined, wait: false, retryableFailure: error.failure.retryable, stopBurst: true, repetitionSuppressed: false };
       }
@@ -1169,6 +1392,7 @@ export class AgentRuntimeService {
         retrieval: retrievalTelemetry,
         grounding: groundingMetadata(grounding),
         acquisitionOperations,
+        capabilities: capabilityMetadata(context.capabilityManifest),
       });
       await this.dependencies.repositories.events.append({
         eventType: "runtime.action_validation_failed",
@@ -1194,6 +1418,25 @@ export class AgentRuntimeService {
     };
     let repetitionSuppressed = false;
     if (action.intent === "SPEAK") {
+      const capabilityGuard = enforceVisionCapabilityTruth({
+        content: action.content ?? "",
+        humanQuery: context.conversationFocus.primaryQuery,
+        capabilities: context.capabilityManifest,
+      });
+      if (capabilityGuard.guarded) {
+        action = {
+          ...action,
+          content: capabilityGuard.content,
+          reasonSummary: "Capability truth prevented an unsupported image claim.",
+          metadata: {
+            ...action.metadata,
+            capabilityGuard: {
+              guarded: true,
+              reason: capabilityGuard.reason ?? "image_capability_unavailable",
+            },
+          },
+        };
+      }
       currentStateGrounding = assessCurrentStateGrounding(action.content ?? "", contextPack);
       if (currentStateGrounding.claimDetected && !currentStateGrounding.supported) {
         action = {
@@ -1213,14 +1456,16 @@ export class AgentRuntimeService {
         ...context.recentMessages.filter((message) => message.authorType === "agent").map((message) => message.contentText),
         ...context.priorBurstContributions,
       ];
-      const duplicate = isObviousRepeatedContent(action.content ?? "", previousContributions)
-        ? {
-            duplicate: true,
-            similarity: 1,
-            sharedTerms: [],
-            reason: "near_exact" as const,
-          }
-        : assessContributionDuplication(action.content ?? "", previousContributions);
+      const duplicate = context.turn.metadata.mode === "explicit_all_agents"
+        ? { duplicate: false, similarity: 0, sharedTerms: [], reason: "distinct_broadcast_role" as const }
+        : isObviousRepeatedContent(action.content ?? "", previousContributions)
+          ? {
+              duplicate: true,
+              similarity: 1,
+              sharedTerms: [],
+              reason: "near_exact" as const,
+            }
+          : assessContributionDuplication(action.content ?? "", previousContributions);
       if (duplicate.duplicate) {
         repetitionSuppressed = true;
         await this.dependencies.repositories.events.append({
@@ -1300,6 +1545,7 @@ export class AgentRuntimeService {
       await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
         ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding, currentStateGrounding, repetitionSuppressed),
         executionFailure: safeErrorSummary(error),
+        capabilities: capabilityMetadata(context.capabilityManifest),
       });
       await this.dependencies.repositories.events.append({
         eventType: "runtime.action_execution_failed",
@@ -1320,6 +1566,7 @@ export class AgentRuntimeService {
       outputMessageId,
       {
         ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding, currentStateGrounding, repetitionSuppressed),
+        capabilities: capabilityMetadata(context.capabilityManifest),
         provider: response.provider,
         model: response.model,
         requestId: response.requestId ?? null,

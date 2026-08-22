@@ -1,5 +1,5 @@
 import { FOUNDATION_GUARDRAILS } from "../src/guardrails";
-import { AGENT_PROMPT_VERSION, TELEGRAM_PRESENTATION_GUIDANCE, assessContributionDuplication, assessCurrentStateGrounding, buildAgentPrompt, buildConversationFocus, classifyConversationIntent, decideThreadContinuation, isObviousRepeatedContent, qualifyUnsupportedCurrentClaim } from "../src/agents";
+import { AGENT_PROMPT_VERSION, TELEGRAM_PRESENTATION_GUIDANCE, assessContributionDuplication, assessCurrentStateGrounding, buildAgentPrompt, buildConversationFocus, capabilityManifestText, classifyConversationIntent, decideThreadContinuation, enforceVisionCapabilityTruth, groupStateSnapshotText, isObviousRepeatedContent, qualifyUnsupportedCurrentClaim } from "../src/agents";
 import { chooseCandidateFromScores, scoreCandidates } from "../src/agents/selection";
 
 interface EvalResult {
@@ -541,6 +541,108 @@ const results: EvalResult[] = [];
   ], {
     turnCount: 1, selectedAgents: [selected?.agentId ?? "none"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "specialist_relevance",
   }, ["PASS: coverage cannot replace subject relevance"]));
+}
+
+{
+  const rollCall = classifyConversationIntent("همه Agentهای فعال فقط اعلام حضور کنید");
+  const broadcast = classifyConversationIntent("همه هشت نفر نظرتون رو کوتاه بگید");
+  results.push(evaluate("postv1-roll-call-and-explicit-broadcast-intents", [
+    assertion(rollCall.interactionIntent === "roll_call", "explicit attendance request uses the deterministic roll-call path"),
+    assertion(broadcast.interactionIntent === "explicit_all_agents", "explicit every-Agent opinion request uses the bounded broadcast path"),
+  ], {
+    turnCount: 0, selectedAgents: [], publicMessageCount: 0, jobsCreated: 1, terminalReason: "special_interaction_mode",
+  }, [
+    "PASS: roll-call acknowledgements require no model calls",
+    "PASS: explicit broadcast is capped by the active normal roster",
+    "PASS: gateway and GOD are outside both normal-Agent modes",
+  ]));
+}
+
+{
+  const unavailable = {
+    canSearchOwnFiles: true,
+    canSearchSharedFiles: true,
+    canUseOfficialLumaKnowledge: true,
+    canRequestAgent: true,
+    canRequestHuman: true,
+    canCreateFiles: true,
+    canCreateDiagram: true,
+    visionModelSupported: true,
+    currentImagePresent: false,
+    currentImageFetchStatus: "not_present" as const,
+    currentImageDeliveredToModel: false,
+    currentImageCount: 0,
+  };
+  const guarded = enforceVisionCapabilityTruth({
+    content: "بله، عکس را می‌بینم و بررسی می‌کنم.",
+    humanQuery: "عکس هم میتونین ببینین؟",
+    capabilities: unavailable,
+  });
+  const manifest = capabilityManifestText(unavailable);
+  results.push(evaluate("postv1-capability-truth-no-image", [
+    assertion(guarded.guarded, "positive vision claim is guarded when no image was delivered"),
+    assertion(guarded.content.includes("تصویری"), "guarded response states the missing capability truthfully"),
+    assertion(manifest.includes("current_image_delivered_to_model=false"), "per-turn delivery state is explicit"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-customer"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "capability_truth_guarded",
+  }, [
+    "PASS: global model vision support is not treated as current-turn evidence",
+    "PASS: no image bytes or token-bearing URL is represented in the manifest",
+  ]));
+}
+
+{
+  const delivered = {
+    canSearchOwnFiles: true,
+    canSearchSharedFiles: true,
+    canUseOfficialLumaKnowledge: true,
+    canRequestAgent: true,
+    canRequestHuman: true,
+    canCreateFiles: true,
+    canCreateDiagram: true,
+    visionModelSupported: true,
+    currentImagePresent: true,
+    currentImageFetchStatus: "available" as const,
+    currentImageDeliveredToModel: true,
+    currentImageCount: 1,
+  };
+  const allowed = enforceVisionCapabilityTruth({
+    content: "بله، تصویر به این نوبت رسیده است.",
+    humanQuery: "این عکس چیه؟",
+    capabilities: delivered,
+  });
+  results.push(evaluate("postv1-capability-truth-delivered-image", [
+    assertion(!allowed.guarded, "truthful image-delivery claim is not suppressed"),
+    assertion(allowed.content === "بله، تصویر به این نوبت رسیده است.", "delivered image remains available to the Agent turn"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-creative"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "vision_input_delivered",
+  }, [
+    "PASS: image capability is evaluated per turn",
+    "PASS: image metadata is separate from image content delivery",
+  ]));
+}
+
+{
+  const snapshot = groupStateSnapshotText({
+    activeNormalAgents: ["agent-product", "agent-technical", "agent-customer"],
+    currentInteractionMode: "normal",
+    invokedAgents: ["agent-product"],
+    respondedAgents: ["agent-product"],
+    pendingAgents: ["agent-technical", "agent-customer"],
+    lastRollCallTargetedAgents: ["agent-product", "agent-technical", "agent-customer"],
+    lastRollCallRespondedAgents: ["agent-product", "agent-customer"],
+    lastRollCallFailedAgents: ["agent-technical"],
+  });
+  results.push(evaluate("postv1-shared-group-awareness", [
+    assertion(snapshot.includes("active_normal_agents=agent-product, agent-technical, agent-customer"), "active roster is explicit"),
+    assertion(snapshot.includes("invoked_agents=agent-product"), "invocation state is distinguished from roster state"),
+    assertion(snapshot.includes("last_roll_call_failed=agent-technical"), "projection failure is observable without speculation"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-product"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "runtime_group_snapshot",
+  }, [
+    "PASS: absence of a reply is not interpreted as Agent offline status",
+    "PASS: gateway/GOD topology is not inferred from normal-Agent state",
+  ]));
 }
 
 const failed = results.filter((result) => !result.passed);

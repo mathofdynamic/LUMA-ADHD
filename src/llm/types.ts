@@ -1,8 +1,18 @@
 export type LLMMessageRole = "user" | "assistant";
 
+export type LLMInputPart =
+  | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "image_data";
+      readonly dataUrl: string;
+      readonly detail?: "low" | "high" | "original" | "auto";
+    };
+
+export type LLMMessageContent = string | readonly LLMInputPart[];
+
 export interface LLMMessage {
   readonly role: LLMMessageRole;
-  readonly content: string;
+  readonly content: LLMMessageContent;
 }
 
 export interface LLMUsage {

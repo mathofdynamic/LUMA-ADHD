@@ -4,6 +4,7 @@ import type {
   LLMGenerateRequest,
   LLMGenerateResponse,
   LLMProvider,
+  LLMMessageContent,
 } from "./types";
 
 export const VERIFIED_NEBULA_BASE_URL = "https://nebula-free-llm.nebula-ai-company.workers.dev/v1";
@@ -93,6 +94,14 @@ function responseText(value: unknown): { text: string; finishReason?: string } |
   };
 }
 
+function nebulaContent(content: LLMMessageContent): string {
+  if (typeof content === "string") return content;
+  if (content.some((part) => part.type === "image_data")) {
+    throw providerFailure("unsupported", "Nebula does not support image input", { retryable: false });
+  }
+  return content.filter((part): part is { readonly type: "text"; readonly text: string } => part.type === "text").map((part) => part.text).join("\n");
+}
+
 export interface NebulaProviderOptions {
   readonly apiKey: string;
   readonly baseUrl?: string;
@@ -139,7 +148,7 @@ export class NebulaProvider implements LLMProvider {
         ...(request.systemPrompt.trim().length > 0
           ? [{ role: "system", content: request.systemPrompt }]
           : []),
-        ...request.messages,
+        ...request.messages.map((message) => ({ role: message.role, content: nebulaContent(message.content) })),
       ],
       ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
       ...(request.maxOutputTokens === undefined ? {} : { max_tokens: request.maxOutputTokens }),

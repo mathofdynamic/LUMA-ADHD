@@ -410,14 +410,16 @@ export class AdminObservatoryService {
             reasons: stringArrayValue(selection.reasons),
             conversationFocus: nullableJsonObject(selection.conversationFocus),
             coveredDomains: stringArrayValue(selection.coveredDomains),
-            coverageBonus: nullableNumber(selection.coverageBonus),
+             coverageBonus: nullableNumber(selection.coverageBonus),
              coveragePenalty: nullableNumber(selection.coveragePenalty),
              explorationUsed: nullableBoolean(selection.explorationUsed),
              promptVersion: nullableString(metadata.promptVersion),
+             interactionMode: nullableString(metadata.mode),
              interactionIntent: nullableString(nullableJsonObject(selection.conversationFocus)?.interactionIntent),
              boundaryReason: nullableString(nullableJsonObject(selection.conversationFocus)?.boundaryReason),
              retrievalSkippedReason: nullableString(nullableJsonObject(selection.conversationFocus)?.retrievalSkippedReason),
              superseded: nullableBoolean(metadata.superseded),
+             capabilities: nullableJsonObject(metadata.capabilities),
            },
         };
       })),
@@ -511,7 +513,7 @@ export class AdminObservatoryService {
     const [messages, participants, turns, decisions, tasks, directives, files, summary, events] = await Promise.all([
       this.database.prepare(
         `SELECT m.id, m.content_text, m.author_type, m.author_agent_id, m.author_user_id,
-                m.reply_to_message_id, m.visibility, m.origin, m.telegram_bot_alias, m.created_at,
+                m.reply_to_message_id, m.visibility, m.origin, m.telegram_bot_alias, m.metadata_json, m.created_at,
                 COALESCE(a.display_name, u.display_name, 'System') AS author_name
          FROM messages m
          LEFT JOIN agents a ON a.id = m.author_agent_id
@@ -544,7 +546,14 @@ export class AdminObservatoryService {
     return {
       ...thread,
       participants: jsonRows(participants.results),
-      messages: jsonRows(messages.results),
+      messages: jsonRows(messages.results.map((row) => {
+        const metadata = objectValue(row.metadata_json);
+        return {
+          ...row,
+          metadata,
+          attachment: nullableJsonObject(metadata.attachment),
+        };
+      })),
       turns: jsonRows(turns.results.map((row) => ({ ...row, metadata: objectValue(row.metadata_json) }))),
       decisions: jsonRows(decisions.results.map((row) => ({ ...row, evidence: arrayValue(row.evidence_json) }))),
       humanTasks: tasks,
@@ -1010,7 +1019,7 @@ export class AdminObservatoryService {
   async retryJob(id: string): Promise<JsonObject> {
     const job = await this.repositories.jobs.getById(id);
     const allowed = new Set([
-      "telegram.interactive_message", "agent.ambient", "agent.deep_work", "human_task.wake",
+      "telegram.interactive_message", "telegram.roll_call", "telegram.explicit_all_agents", "agent.ambient", "agent.deep_work", "human_task.wake",
       "knowledge.sync_source", "reputation.daily_score", "reputation.off_cycle_score", "god.review", "diagram.render",
     ]);
     if (!allowed.has(job.jobType)) throw new ValidationError("job type is not recoverable through the Observatory");

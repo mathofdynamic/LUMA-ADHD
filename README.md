@@ -4,6 +4,8 @@ LUMA ADHD is a persistent multi-agent workspace for thinking about LUMA as a com
 
 v1 is complete through Phase 08. It includes eight normal Agents, GOD as a distinct supervisory model, gateway-only Telegram ingress with persona outbound identities, D1-backed memory/files/RAG, domain reputation, Human Tasks, source-first diagrams, and a private Admin Observatory. Phase 08 hardens failure handling, idempotency, loop limits, deterministic evaluations, security review, CI, deployment, and operations. The current post-v1 provider contract runs all normal Agents on OpenAI `gpt-5.6-luna` with `medium` reasoning and GOD on the same model with `xhigh` reasoning; Nebula remains a supported fallback but is inactive in production.
 
+Telegram media, per-turn vision capability truth, deterministic roll calls, and explicit all-Agent broadcasts are documented in [TELEGRAM_MEDIA_AND_GROUP_TRUTH.md](docs/TELEGRAM_MEDIA_AND_GROUP_TRUTH.md).
+
 ## Local setup
 
 ```bash

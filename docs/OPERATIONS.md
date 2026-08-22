@@ -22,6 +22,8 @@ Normal Agents and GOD now use the shared OpenAI Luna transport with separate rea
 
 Check Worker health, Admin System outbound state, the configured gateway webhook, pending updates, and Telegram `getWebhookInfo` through the operator tool. Confirm the private group ID and secret header. Persona bots remain outbound-only. Do not drop pending updates or reinstall the webhook as a first response. Inspect `telegram_outbound` state before retrying an ambiguous send.
 
+For image messages, inspect the canonical attachment metadata and per-turn capability state described in [TELEGRAM_MEDIA_AND_GROUP_TRUTH.md](TELEGRAM_MEDIA_AND_GROUP_TRUTH.md). The Worker fetches at most one bounded image ephemerally through Telegram; D1 stores metadata only. Use the deterministic roll-call path only for an authorized explicit attendance request. Gateway and GOD are not normal roll-call participants.
+
 ## D1 and migrations
 
 If a migration fails, stop and inspect Wrangler output and the remote migration list. Do not edit an applied migration or run destructive SQL as a first response. Query failures should be bounded and visible as an Admin/System error. D1 remains the canonical state; Telegram and provider outputs can be replayed only through idempotent application services.

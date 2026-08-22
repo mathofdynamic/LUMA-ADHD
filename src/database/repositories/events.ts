@@ -126,4 +126,20 @@ export class EventRepository {
 
     return result.results.map(mapEvent);
   }
+
+  async listRecentByTypeForChat(chatId: string, eventType: string, limit = 5): Promise<readonly StoredEvent[]> {
+    const safeLimit = requireLimit(limit, "chat event list limit", 20);
+    const result = await this.database
+      .prepare(
+        `SELECT e.* FROM events e
+         INNER JOIN threads t ON t.id = e.thread_id
+         WHERE t.chat_id = ? AND e.event_type = ?
+         ORDER BY e.occurred_at DESC, e.id DESC
+         LIMIT ?`,
+      )
+      .bind(chatId, eventType, safeLimit)
+      .all<EventRow>();
+
+    return result.results.map(mapEvent);
+  }
 }

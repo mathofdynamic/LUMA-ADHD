@@ -23,6 +23,18 @@ function titleFromMessage(text: string): string {
   return `Telegram discussion: ${characters.slice(0, 80).join("") || "Untitled"}`;
 }
 
+function jobTypeForIntent(intent: string): string {
+  if (intent === "roll_call") return "telegram.roll_call";
+  if (intent === "explicit_all_agents") return "telegram.explicit_all_agents";
+  return "telegram.interactive_message";
+}
+
+function jobKeyForIntent(botAlias: string, updateId: string, intent: string): string {
+  if (intent === "roll_call") return `telegram-roll-call:${botAlias}:${updateId}`;
+  if (intent === "explicit_all_agents") return `telegram-explicit-all-agents:${botAlias}:${updateId}`;
+  return `telegram-interactive:${botAlias}:${updateId}`;
+}
+
 function mentionedAgentId(
   config: TelegramConfig,
   text: string,
@@ -109,11 +121,16 @@ export class TelegramInboundService {
       return { status: "ignored", reason: "chat_not_configured" };
     }
 
+    const classification = classifyConversationIntent(update.text);
+    if (classification.interactionIntent === "roll_call" && !this.dependencies.config.adminUserIds.has(update.sender.id)) {
+      return { status: "ignored", reason: "roll_call_requires_authorized_human" };
+    }
+
     const existing = await this.dependencies.repositories.messages.findByTelegramUpdate(
       update.updateId,
       botAlias,
     );
-    const jobKey = `telegram-interactive:${botAlias}:${update.updateId}`;
+    const jobKey = jobKeyForIntent(botAlias, update.updateId, classification.interactionIntent);
     if (existing) {
       const existingTaskId = typeof existing.metadata.humanTaskId === "string" ? existing.metadata.humanTaskId : null;
       if (existingTaskId) {
@@ -136,7 +153,7 @@ export class TelegramInboundService {
       }
       const existingJob = await this.dependencies.repositories.jobs.getByIdempotencyKey(jobKey).catch(() => null);
       const job = existingJob ?? await this.dependencies.repositories.jobs.create({
-        jobType: "telegram.interactive_message",
+        jobType: jobTypeForIntent(typeof existing.metadata.interactionIntent === "string" ? existing.metadata.interactionIntent : "substantive"),
         payload: {
           source: "telegram",
           updateId: update.updateId,
@@ -146,8 +163,9 @@ export class TelegramInboundService {
           addressedAgentId: existing.metadata.addressedAgentId === null
             ? null
             : typeof existing.metadata.addressedAgentId === "string"
-              ? existing.metadata.addressedAgentId
-              : null,
+                ? existing.metadata.addressedAgentId
+                : null,
+          interactionIntent: typeof existing.metadata.interactionIntent === "string" ? existing.metadata.interactionIntent : "substantive",
         },
         idempotencyKey: jobKey,
         dueAt: receivedAt,
@@ -175,6 +193,16 @@ export class TelegramInboundService {
       isWorkspace: true,
       metadata: { source: "telegram", workspace: true },
     });
+    if (classification.interactionIntent === "roll_call") {
+      const recent = await this.dependencies.repositories.messages.listRecentByChat(chat.id, 50);
+      const nowMs = Date.parse(receivedAt);
+      const equivalentRollCall = recent.some((message) => {
+        if (message.authorType !== "human" || message.authorUserId === null || message.metadata.interactionIntent !== "roll_call") return false;
+        const createdMs = Date.parse(message.createdAt);
+        return Number.isFinite(nowMs) && Number.isFinite(createdMs) && nowMs - createdMs >= 0 && nowMs - createdMs < 5 * 60_000;
+      });
+      if (equivalentRollCall) return { status: "ignored", reason: "roll_call_cooldown" };
+    }
     const user = await this.dependencies.repositories.users.upsertByExternalKey({
       externalKey: `telegram:user:${update.sender.id}`,
       displayName: update.sender.displayName,
@@ -216,7 +244,6 @@ export class TelegramInboundService {
       );
     }
 
-    const classification = classifyConversationIntent(update.text);
     let continuationReason: string | null = null;
     let supersedesThreadId: string | null = null;
     let thread = repliedMessage
@@ -252,7 +279,7 @@ export class TelegramInboundService {
     if (!thread) {
       thread = await this.dependencies.repositories.threads.create({
         chatId: chat.id,
-        title: titleFromMessage(update.text),
+        title: titleFromMessage(update.text || "image attachment"),
         createdByUserId: user.id,
         telegramTopicId: update.topicId,
         metadata: {
@@ -281,7 +308,7 @@ export class TelegramInboundService {
       chatId: chat.id,
       authorType: "human",
       authorUserId: user.id,
-      contentText: update.text,
+      contentText: update.text || "[image attachment]",
       replyToMessageId: repliedMessage?.id,
       origin: "telegram",
       telegramChatId: update.chat.id,
@@ -299,6 +326,7 @@ export class TelegramInboundService {
         conversationBoundaryReason: continuationReason ?? classification.boundaryReason,
         threadContinuationReason: continuationReason,
         supersedesThreadId,
+        ...(update.attachment === undefined ? {} : { attachment: { ...update.attachment } }),
       },
     });
     await this.dependencies.repositories.threads.touchActivity(thread.id, receivedAt);
@@ -311,7 +339,7 @@ export class TelegramInboundService {
         }).resolveFromResponse({
           taskId: repliedHumanTaskId,
           threadId: thread.id,
-          responseText: update.text,
+          responseText: update.text || "[image attachment]",
           responseMessageId: message.id,
           responderUserId: user.id,
           responseSource: "telegram",
@@ -342,7 +370,7 @@ export class TelegramInboundService {
     }
 
     const job = await this.dependencies.repositories.jobs.create({
-      jobType: "telegram.interactive_message",
+      jobType: jobTypeForIntent(classification.interactionIntent),
       payload: {
         source: "telegram",
         updateId: update.updateId,
@@ -350,6 +378,7 @@ export class TelegramInboundService {
         threadId: thread.id,
         chatId: chat.id,
         addressedAgentId,
+        interactionIntent: classification.interactionIntent,
       },
       idempotencyKey: jobKey,
       dueAt: receivedAt,

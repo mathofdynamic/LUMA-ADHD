@@ -8,3 +8,4 @@ export * from "./memory-tools";
 export * from "./grounding";
 export * from "./conversation-focus";
 export * from "./repetition";
+export * from "./capabilities";
