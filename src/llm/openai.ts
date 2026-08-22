@@ -3,6 +3,8 @@ import { LLMProviderError, providerFailure } from "./errors";
 import type {
   LLMGenerateRequest,
   LLMGenerateResponse,
+  LLMInputPart,
+  LLMMessageContent,
   LLMProvider,
   LLMStructuredOutput,
   LLMUsage,
@@ -86,6 +88,23 @@ function formatForStructuredOutput(output: LLMStructuredOutput): Record<string, 
   };
 }
 
+function openAIContent(content: LLMMessageContent): string | readonly Record<string, unknown>[] {
+  if (typeof content === "string") return content;
+  return content.map((part: LLMInputPart) => {
+    if (part.type === "text") {
+      return { type: "input_text", text: part.text };
+    }
+    if (!/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/u.test(part.dataUrl)) {
+      throw providerFailure("unsupported", "OpenAI image input must be a bounded inline data URL", { retryable: false });
+    }
+    return {
+      type: "input_image",
+      image_url: part.dataUrl,
+      ...(part.detail === undefined ? {} : { detail: part.detail }),
+    };
+  });
+}
+
 function failureForStatus(response: Response): LLMProviderError {
   const retryAfterSeconds = retryAfter(response);
   if (response.status === 401 || response.status === 403) {
@@ -159,7 +178,7 @@ export class OpenAIProvider implements LLMProvider {
       model,
       store: false,
       ...(request.systemPrompt.trim().length === 0 ? {} : { instructions: request.systemPrompt }),
-      input: request.messages.map((message) => ({ role: message.role, content: message.content })),
+      input: request.messages.map((message) => ({ role: message.role, content: openAIContent(message.content) })),
       ...(request.maxOutputTokens === undefined ? {} : { max_output_tokens: request.maxOutputTokens }),
       ...(request.reasoningEffort === undefined ? {} : { reasoning: { effort: request.reasoningEffort } }),
       ...(request.structuredOutput === undefined ? {} : { text: { format: formatForStructuredOutput(request.structuredOutput) } }),

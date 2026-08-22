@@ -6,7 +6,9 @@ export type ConversationInteractionIntent =
   | "social"
   | "acknowledgement"
   | "correction"
-  | "topic_reset";
+  | "topic_reset"
+  | "roll_call"
+  | "explicit_all_agents";
 
 export type ConversationBoundaryReason =
   | "explicit_telegram_reply"
@@ -18,6 +20,7 @@ export type ConversationBoundaryReason =
   | "topic_reset_new_boundary"
   | "social_new_boundary"
   | "acknowledgement_new_boundary"
+  | "roll_call_new_boundary"
   | "ambiguous_temporal_gap"
   | "no_active_thread";
 
@@ -34,6 +37,7 @@ export interface ConversationFocusInput {
   readonly wakeMessage: MessageRecord | null;
   readonly anchorMessage?: MessageRecord | null;
   readonly recentMessages: readonly MessageRecord[];
+  readonly currentImagePresent?: boolean;
 }
 
 export interface ConversationFocus {
@@ -52,6 +56,7 @@ export interface ConversationFocus {
   readonly retrievalQuery: string;
   readonly isBroadQuestion: boolean;
   readonly isCurrentStateQuestion: boolean;
+  readonly currentImagePresent: boolean;
 }
 
 const NUDGE_PATTERNS: readonly RegExp[] = [
@@ -85,6 +90,21 @@ const RESET_PATTERNS: readonly RegExp[] = [
   /forget\s+(?:that|the\s+last\s+topic)/iu,
   /start\s+over/iu,
   /drop\s+(?:that|the\s+topic)/iu,
+];
+
+const ROLL_CALL_PATTERNS: readonly RegExp[] = [
+  /اعلام\s+حضور/u,
+  /هر\s*کی.*(?:می.?بینه|می.?بیند).*حاضر/u,
+  /همه.*(?:حاضر|حضور)/u,
+  /roll\s*call/iu,
+  /everyone\s+(?:check\s*in|say\s+you(?:'re|\s+are)\s+here)/iu,
+];
+
+const EXPLICIT_ALL_AGENT_PATTERNS: readonly RegExp[] = [
+  /همه(?:\s+هشت\s+نفر)?(?:تون|تان)?.*(?:نظر|جواب|پاسخ|بگ(?:ید|ین))/u,
+  /نظر\s+تک\s*تک.*(?:agent|نفر|تون|تان)/iu,
+  /(?:هر|همه)\s+(?:agent|ایجنت)s?.*(?:نظر|جواب|پاسخ|answer|speak)/iu,
+  /(?:all|every|each)\s+(?:eight\s+)?agents?.*(?:answer|opinion|speak|respond)/iu,
 ];
 
 const SOCIAL_EXACT = new Set([
@@ -204,6 +224,12 @@ export function classifyConversationIntent(value: string): ConversationClassific
   if (isAcknowledgement(normalized)) {
     return { interactionIntent: "acknowledgement", primaryText: value.trim(), boundaryReason: null, supersedesStaleWork: false, retrievalSkipped: true };
   }
+  if (ROLL_CALL_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return { interactionIntent: "roll_call", primaryText: value.trim(), boundaryReason: "roll_call_new_boundary", supersedesStaleWork: false, retrievalSkipped: true };
+  }
+  if (EXPLICIT_ALL_AGENT_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return { interactionIntent: "explicit_all_agents", primaryText: value.trim(), boundaryReason: null, supersedesStaleWork: false, retrievalSkipped: false };
+  }
   if (isNudge(normalized)) {
     return { interactionIntent: "nudge", primaryText: value.trim(), boundaryReason: "explicit_continuation", supersedesStaleWork: false, retrievalSkipped: false };
   }
@@ -280,6 +306,9 @@ export function decideThreadContinuation(input: ThreadContinuationInput): Thread
       ? { continueThread: true, classification, reason: classification.boundaryReason ?? "correction_supersedes_active_thread" }
       : { continueThread: false, classification, reason: classification.boundaryReason ?? "topic_reset_new_boundary" };
   }
+  if (classification.interactionIntent === "roll_call") {
+    return { continueThread: false, classification, reason: "roll_call_new_boundary" };
+  }
   if (classification.interactionIntent === "nudge") {
     return age <= 24
       ? { continueThread: true, classification, reason: "explicit_continuation" }
@@ -305,14 +334,20 @@ export function buildConversationFocus(input: ConversationFocusInput): Conversat
     ? classifyConversationIntent(latestHuman.contentText)
     : { interactionIntent: "substantive" as const, primaryText: "", boundaryReason: null, supersedesStaleWork: false, retrievalSkipped: false };
   const substantiveHuman = [...humanMessages].reverse().find(isSubstantiveHuman) ?? null;
+  const attachment = latestHuman?.metadata?.attachment;
+  const currentImagePresent = input.currentImagePresent === true
+    || (typeof attachment === "object" && attachment !== null && !Array.isArray(attachment) && (attachment as { readonly type?: unknown }).type === "image");
   const primary = (classification.interactionIntent === "nudge" ? substantiveHuman?.contentText : latestHuman?.contentText)?.trim()
+    || (currentImagePresent ? "image attachment" : undefined)
     || input.thread.summary?.trim()
     || input.thread.title.trim();
   const boundaryAt = latestHuman?.createdAt ?? input.wakeMessage?.createdAt ?? null;
   const currentMessages = messageAtOrAfter(messages, boundaryAt);
   const latestAgent = [...currentMessages].reverse().find((message) => message.authorType === "agent") ?? null;
   const lightweight = isLightweightInteractionIntent(classification.interactionIntent);
-  const recentDevelopment = lightweight ? null : latestAgent?.contentText.trim() ?? null;
+  const recentDevelopment = lightweight || classification.interactionIntent === "roll_call"
+    ? null
+    : latestAgent?.contentText.trim() ?? null;
   const unresolvedQuestion = classification.interactionIntent === "nudge"
     ? substantiveHuman?.contentText.trim() ?? null
     : classification.interactionIntent === "social" || classification.interactionIntent === "acknowledgement" || classification.interactionIntent === "correction" || classification.interactionIntent === "topic_reset"
@@ -326,7 +361,7 @@ export function buildConversationFocus(input: ConversationFocusInput): Conversat
   const selectionQuery = lightweight
     ? cap(primary, 900)
     : cap([primary, recentDevelopment].filter((value): value is string => Boolean(value)).join("\n"), 1_200);
-  const retrievalQuery = classification.retrievalSkipped
+  const retrievalQuery = classification.retrievalSkipped || currentImagePresent && normalizeConversationText(primary).includes("image attachment")
     ? ""
     : cap([primary, unresolvedQuestion, recentDevelopment].filter((value): value is string => Boolean(value)).join("\n"), 1_600);
 
@@ -346,6 +381,7 @@ export function buildConversationFocus(input: ConversationFocusInput): Conversat
     retrievalQuery,
     isBroadQuestion: broad,
     isCurrentStateQuestion: current,
+    currentImagePresent,
   };
 }
 

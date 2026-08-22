@@ -23,13 +23,33 @@ export interface TelegramMessageEntity {
   readonly user?: TelegramUser;
 }
 
+export interface TelegramPhotoSize {
+  readonly file_id: string;
+  readonly file_unique_id: string;
+  readonly width: number;
+  readonly height: number;
+  readonly file_size?: number;
+}
+
+export interface TelegramDocument {
+  readonly file_id: string;
+  readonly file_unique_id: string;
+  readonly file_name?: string;
+  readonly mime_type?: string;
+  readonly file_size?: number;
+}
+
 export interface TelegramMessage {
   readonly message_id: number | string;
   readonly from?: TelegramUser;
   readonly chat: TelegramChat;
   readonly date: number;
   readonly text?: string;
+  readonly caption?: string;
+  readonly caption_entities?: readonly TelegramMessageEntity[];
   readonly entities?: readonly TelegramMessageEntity[];
+  readonly photo?: readonly TelegramPhotoSize[];
+  readonly document?: TelegramDocument;
   readonly reply_to_message?: TelegramMessage;
   readonly message_thread_id?: number | string;
 }
@@ -49,6 +69,18 @@ export interface TelegramReplyReference {
   readonly senderUsername: string | undefined;
 }
 
+export interface TelegramImageAttachmentMetadata {
+  readonly type: "image";
+  readonly source: "photo" | "document";
+  readonly telegramFileId: string;
+  readonly telegramFileUniqueId: string;
+  readonly mimeType?: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly fileSize?: number;
+  readonly fileName?: string;
+}
+
 export interface NormalizedTelegramUpdate {
   readonly updateId: string;
   readonly messageId: string;
@@ -65,6 +97,7 @@ export interface NormalizedTelegramUpdate {
   };
   readonly text: string;
   readonly entities: readonly TelegramMessageEntity[];
+  readonly attachment?: TelegramImageAttachmentMetadata;
   readonly replyTo: TelegramReplyReference | undefined;
   readonly topicId: string | undefined;
 }
@@ -117,6 +150,20 @@ export interface TelegramTransport {
   /** Real Bot API transport requires a configured bot token; test/operator transports may not. */
   readonly requiresBotToken?: boolean;
   sendTextMessage(input: TelegramSendTextInput): Promise<TelegramSentMessage>;
+}
+
+export type TelegramImageFetchStatus =
+  | "available"
+  | "unavailable"
+  | "rejected"
+  | "download_failed";
+
+export interface TelegramImageFetchResult {
+  readonly status: TelegramImageFetchStatus;
+  readonly dataUrl?: string;
+  readonly mimeType?: string;
+  readonly byteLength?: number;
+  readonly errorCategory?: string;
 }
 
 export interface TelegramInboundResult {

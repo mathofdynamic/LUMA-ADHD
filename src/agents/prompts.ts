@@ -8,10 +8,11 @@ import type {
 import type { ContextPackTelemetry } from "../memory/types";
 import type { LLMMessage } from "../llm";
 import type { ConversationFocus } from "./conversation-focus";
+import { capabilityManifestText, groupStateSnapshotText, type AgentCapabilityManifest, type AgentGroupStateSnapshot } from "./capabilities";
 
-export const AGENT_PROMPT_VERSION = "postv1-organizational-self-v2";
+export const AGENT_PROMPT_VERSION = "postv1-organizational-self-v3-presentation";
 
-export type AgentPromptMode = "interactive" | "social" | "ambient" | "deep_work";
+export type AgentPromptMode = "interactive" | "social" | "ambient" | "deep_work" | "explicit_all_agents";
 
 export interface PromptParticipant {
   readonly id: string;
@@ -40,6 +41,8 @@ export interface AgentPromptContext {
   readonly conversationFocus?: ConversationFocus;
   readonly coveredDomains?: readonly string[];
   readonly contributionRole?: "CONTRIBUTE" | "SYNTHESIZE";
+  readonly capabilityManifest?: AgentCapabilityManifest;
+  readonly groupState?: AgentGroupStateSnapshot;
 }
 
 export interface BuiltAgentPrompt {
@@ -78,12 +81,17 @@ const WORK_OUTPUT_CONTRACT = [
 ].join("\n");
 
 export const TELEGRAM_PRESENTATION_GUIDANCE = [
-  "Telegram presentation: SPEAK content is projected with parse_mode=HTML.",
-  "Use only <b>, <i>, <code>, <blockquote>, and safe https links when genuinely useful. Never emit Markdown markers or fences.",
-  "When directly addressing a participant, bold only the exact canonical name, for example <b>کیان</b>، ... . Do not bold every name or the whole message.",
-  "Do not address the human by name unless it adds clarity or was requested. Use short natural Persian or English and do not pad.",
-  "Use the lightest structure that fits: a short paragraph, or • bullets when scanning benefits. One main contribution per turn.",
-  "If this turn replies to another message, Telegram already shows that context. Do not restate the whole replied-to message.",
+  "TELEGRAM PRESENTATION POLICY (Telegram presentation)",
+  "SPEAK content is projected in Telegram with parse_mode=HTML and read quickly on a phone. Choose presentation by the human's intent and the number and complexity of ideas, not by habit.",
+  "Safe HTML, when genuinely useful, is limited to <b>, <i>, <u>, <s>, <code>, <pre>, <blockquote>, <a href=\"https://...\">, and <tg-spoiler>. Keep tags balanced. Never emit Markdown markers or fences; Markdown is forbidden.",
+  "SOCIAL / CASUAL: for greetings, thanks, acknowledgements, and ordinary chat, use plain natural text with little or no formatting. Never turn a greeting into a report; do not add a heading just because HTML is available.",
+  "SIMPLE ANSWER: use one or two short paragraphs. Bold at most one genuinely useful key phrase; formatting is optional.",
+  "MULTI-POINT ANSWER: use a short opening sentence followed by • bullets or short separated sections. When there are three or more distinct points, prefer scan-friendly bullets over one dense paragraph. Keep one coherent contribution per turn.",
+  "ANALYTICAL / STRATEGIC: when the content is genuinely analytical, concise labels may create hierarchy: <b>جمع‌بندی:</b>, <b>نکته مهم:</b>, <b>ریسک:</b>, or <b>پیشنهاد:</b>. Generate labels from the actual content, use only the labels that help, and do not force a fixed template.",
+  "TECHNICAL: use <code>identifier</code> or <pre>...</pre> only for actual identifiers, commands, configuration, logs, or code. QUOTE: use <blockquote>...</blockquote> only when quoting a specific prior statement materially helps.",
+  "IMAGE ANSWERS: if several visible observations matter, a scannable form is allowed: <b>چیزی که می‌بینم:</b> followed by • observations and an optional <b>جمع‌بندی:</b>. A trivial visual question may remain one short sentence. Do not invent image-specific content from this format example.",
+  "Do not over-format: never bold every sentence, create headings for casual text, or make every message look like documentation. Do not use a 500-character unbroken paragraph when the same information can be scanned clearly. Do not address the human by name unless it adds clarity or was requested.",
+  "Keep the Agent's personality and role visible without cloning a hardcoded template across Agents. If this turn replies to another message, Telegram already shows that context. Do not restate the whole replied-to message.",
   "Neutral format examples only: SHORT: به‌نظرم گزینه دوم واضح‌تر است؛ دلیل اصلی، محدودیت زمانی این تصمیم است.\nADDRESS: <b>کیان</b>، این بخش نیاز به بررسی فنی تو دارد.\nBULLETS: • مورد اول\n• مورد دوم",
 ].join("\n");
 
@@ -101,7 +109,10 @@ function formatMessage(
   const author = participant?.displayName
     ?? (message.authorType === "human" ? humanDisplayName ?? "human" : message.authorType);
   const reply = message.replyToMessageId ? ` reply_to:${message.replyToMessageId}` : "";
-  return `[${message.createdAt}] ${author}${reply}: ${message.contentText}`;
+  const attachment = typeof message.metadata?.attachment === "object" && message.metadata.attachment !== null
+    ? " [image attachment metadata present; image content is not included unless delivered to this turn]"
+    : "";
+  return `[${message.createdAt}] ${author}${reply}: ${message.contentText}${attachment}`;
 }
 
 function compactList(values: readonly string[], limit: number): string {
@@ -145,6 +156,12 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
   const covered = context.coveredDomains?.join(", ") || "none";
   const humanTriggered = /(?:^|_)human(?:_|$)/u.test(context.wakeReason) || context.wakeReason === "new_human_message";
   const rolePrinciple = ROLE_PRINCIPLES[context.agent.id] ?? "Use your specialty as a bounded lens and defer when another teammate owns the question more strongly.";
+  const capabilityText = context.capabilityManifest
+    ? capabilityManifestText(context.capabilityManifest)
+    : "CURRENT CAPABILITIES (runtime truth for this exact turn)\nNo dynamic capability manifest was supplied; do not claim access beyond the explicit application contract.";
+  const groupStateText = context.groupState
+    ? groupStateSnapshotText(context.groupState)
+    : "SHARED GROUP STATE\nNo dynamic group snapshot was supplied; do not speculate about who processed a message.";
 
   const identityLayers = [
     "ORGANIZATIONAL CONSTITUTION",
@@ -188,6 +205,7 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     `contribution_role: ${context.contributionRole ?? "CONTRIBUTE"}; addressed_agent_id: ${context.addressedAgentId ?? "none"}; addressed_agent_name: ${addressedParticipant?.displayName ?? "none"}`,
     `requested_agent_ids: ${context.requestedAgentIds?.join(", ") || "none"}; known_participants: ${participantText}`,
     `current-boundary recent messages:\n${recentText}`,
+    groupStateText,
   ];
 
   const evidenceLayers = [
@@ -206,6 +224,14 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     humanTriggered ? "Answer or advance the human's actual request first. Do not replace a direct answer with unrelated file work, experiments, or generic organizational activity." : "Autonomous work may update durable files or memory, REQUEST_AGENT, REQUEST_HUMAN when genuinely necessary, DRAW, or WAIT. Public speech is optional.",
     "Read prior contributions. For later turns, add a materially new specialist perspective, challenge a weak assumption with evidence, fill a missing gap, synthesize distinct contributions when assigned, or WAIT. Never paraphrase the same point merely because you were selected.",
     `already_covered_perspectives: ${covered}; coverage is a soft aid and never overrides subject relevance.`,
+    mode === "explicit_all_agents"
+      ? "EXPLICIT ALL-AGENTS BROADCAST: the human explicitly requested each active normal Agent's bounded perspective. Give one concise role-grounded response, defer honestly when outside your specialty, and do not create a second round."
+      : "Normal discussion remains selective. Do not speak merely because another Agent spoke or because the group is active.",
+  ];
+
+  const capabilitySection = [
+    capabilityText,
+    "Runtime capability truth outranks model assumptions. If an image is not delivered to this exact turn, do not say that you see it or promise that sending it will work.",
   ];
 
   const actionContract = [
@@ -221,6 +247,7 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
     "SOCIAL / ACKNOWLEDGEMENT FAST PATH",
     "This is a lightweight conversational turn. Keep the Agent identity and natural personality, but do not use RAG, acquisition, documents, strategic analysis, or stale thread context.",
     "For a pure greeting, acknowledgement, emoji, or correction: return at most one short natural SPEAK or WAIT. Do not create durable work. Do not revive old strategy. A correction should acknowledge the correction briefly or WAIT.",
+    "Social presentation is plain and natural: no heading or bullet list unless the human's message genuinely requires one. Do not make a greeting look like documentation.",
   ];
 
   const outputContract = [
@@ -234,8 +261,8 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
   ];
 
   const sections = lightweight
-    ? [...identityLayers, ...situationLayers, ...socialContract, ...socialOutputContract]
-    : [...identityLayers, ...situationLayers, ...evidenceLayers, ...behavior, TELEGRAM_PRESENTATION_GUIDANCE, ...actionContract, ...outputContract];
+    ? [...identityLayers, ...situationLayers, capabilitySection.join("\n"), ...socialContract, ...socialOutputContract]
+    : [...identityLayers, ...situationLayers, ...evidenceLayers, ...behavior, TELEGRAM_PRESENTATION_GUIDANCE, capabilitySection.join("\n"), ...actionContract, ...outputContract];
 
   return {
     systemPrompt: sections.join("\n"),

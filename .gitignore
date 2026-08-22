@@ -13,6 +13,7 @@ coverage/
 .nebula-smoke.bundle.mjs
 .openai-god-smoke.bundle.mjs
 .openai-luna-smoke.bundle.mjs
+.openai-luna-presentation-smoke.bundle.mjs
 .eval.bundle.mjs
 .agent-prompt-diagnostic.bundle.mjs
 phase05-live-smoke-*.wrangler.jsonc

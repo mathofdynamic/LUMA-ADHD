@@ -21,7 +21,7 @@ export interface CandidateSelectionInput {
   readonly now?: string;
   readonly explorationRate?: number;
   readonly rng?: () => number;
-  readonly mode?: "interactive" | "social" | "ambient" | "deep_work";
+  readonly mode?: "interactive" | "social" | "ambient" | "deep_work" | "explicit_all_agents";
   readonly isBroadQuestion?: boolean;
   readonly coveredDomains?: readonly string[];
   readonly contributionRole?: "CONTRIBUTE" | "SYNTHESIZE";
@@ -148,6 +148,7 @@ function isRelevantCandidate(
 ): boolean {
   if (addressed || requested || lexicalScore > 0) return true;
   if (mode === "social") return true;
+  if (mode === "explicit_all_agents") return true;
   // Ambient work may use a thread's lifecycle phase as a bounded opportunity
   // signal. Interactive human routing must instead answer the actual query;
   // phase alone is not enough unless the question is explicitly broad.

@@ -10,7 +10,7 @@ import {
   type LLMProvider,
   type LLMReasoningEffort,
 } from "../llm";
-import { createTelegramApplication, TelegramBotApiTransport, parseTelegramConfig } from "../telegram";
+import { createTelegramApplication, TelegramBotApiTransport, TelegramMediaFetcher, parseTelegramConfig } from "../telegram";
 import { AgentRuntimeService, type AgentRuntimeDependencies } from "./runtime";
 import { AgentScheduler, type AgentJobQueue } from "./scheduler";
 import { createMemoryServices } from "../memory";
@@ -146,6 +146,7 @@ export function createAgentRuntime(
     reasoningEffort: normalConfig.reasoningEffort,
     memory,
     reputation,
+    media: new TelegramMediaFetcher({ config: telegramConfig }),
     now: options?.now,
     rng: options?.rng,
   };
