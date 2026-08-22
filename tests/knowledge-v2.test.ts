@@ -200,6 +200,29 @@ describe("LUMA Knowledge v2 derived cache and retrieval", () => {
     expect(searchCalls).toBe(1);
   });
 
+  it("refreshes explicit current questions despite a matching local cache hit", async () => {
+    let searchCalls = 0;
+    const client = new LumaKnowledgeClient({
+      baseUrl: "https://knowledge.test/api/v1",
+      token: "test-token",
+      fetcher: async (input) => {
+        if (String(input).includes("/search?")) {
+          searchCalls += 1;
+          return jsonResponse({ items: [baseRecords.items[0]] });
+        }
+        return fixtureFetcher({})(input);
+      },
+    });
+    const service = new KnowledgeV2Service(new KnowledgeV2Repository(repositories.database), client);
+    const pack = await new ContextPackService(repositories.database, service).build({
+      query: "What is the current Workflow product?",
+      topK: 6,
+      maxCharacters: 4_000,
+    });
+    expect(searchCalls).toBe(1);
+    expect(pack.telemetry.knowledgeV2LiveSearchUsed).toBe(true);
+  });
+
   it("does not cache restricted records returned by a mis-scoped fixture", async () => {
     const client = new LumaKnowledgeClient({ baseUrl: "https://knowledge.test/api/v1", token: "test-token", fetcher: fixtureFetcher({ restricted: true }) });
     const service = new KnowledgeV2Service(new KnowledgeV2Repository(repositories.database), client, () => "2026-08-22T12:30:00.000Z");

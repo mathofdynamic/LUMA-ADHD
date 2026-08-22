@@ -287,10 +287,14 @@ export class ContextPackService {
     candidates.push(...retrieved, ...official);
     const currentState = /(?:current|today|latest|now|فعلی|امروز|الان|جدیدترین)/iu.test(input.query);
     const visual = /(?:screenshot|screen|ui|ux|dashboard|تصویر|اسکرین|رابط|صفحه)/iu.test(input.query);
-    const localKnowledgeV2Hit = [...retrieved, ...official].some((item) => item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk");
-    const shouldUseLiveKnowledgeV2 = Boolean(this.knowledgeV2?.configured)
-      && (currentState || visual || queryIntent === "official_factual" || queryIntent === "mixed")
-      && !localKnowledgeV2Hit;
+    // Explicit current/visual questions should get a bounded live snapshot even
+    // when the derived cache has a matching hit. The Knowledge service exposes
+    // updated-at semantics rather than a complete revision log, so a local hit
+    // alone cannot prove freshness. The v2 service shares this search across
+    // Agents in the same bounded turn and keeps ordinary cached queries local.
+    const shouldUseLiveKnowledgeV2 = Boolean(this.knowledgeV2?.configured) && (
+      currentState || visual || queryIntent === "official_factual" || queryIntent === "mixed"
+    );
     const knowledgeV2 = shouldUseLiveKnowledgeV2
       ? await this.knowledgeV2!.searchForContext({
         query: input.query,
