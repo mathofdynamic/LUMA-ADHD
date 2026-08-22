@@ -1,6 +1,7 @@
 import { FOUNDATION_GUARDRAILS } from "../src/guardrails";
 import { AGENT_PROMPT_VERSION, TELEGRAM_PRESENTATION_GUIDANCE, assessContributionDuplication, assessCurrentStateGrounding, buildAgentPrompt, buildConversationFocus, capabilityManifestText, classifyConversationIntent, decideThreadContinuation, enforceVisionCapabilityTruth, groupStateSnapshotText, isObviousRepeatedContent, qualifyUnsupportedCurrentClaim } from "../src/agents";
 import { chooseCandidateFromScores, scoreCandidates } from "../src/agents/selection";
+import { knowledgeApiPath, normalizeKnowledgeRecord } from "../src/knowledge/client";
 
 interface EvalResult {
   readonly scenarioId: string;
@@ -672,6 +673,73 @@ const results: EvalResult[] = [];
   }, [
     "PASS: absence of a reply is not interpreted as Agent offline status",
     "PASS: gateway/GOD topology is not inferred from normal-Agent state",
+  ]));
+}
+
+{
+  const record = normalizeKnowledgeRecord({
+    id: "pricing-current", kind: "document", title: "Current pricing", visibility: "MANAGEMENT",
+    type: "CURRENT_OPERATIONAL_DATA", updatedAt: "2026-08-22T09:00:00.000Z", content: "Current plans are represented here.",
+  });
+  results.push(evaluate("knowledge-v2-provenance-and-visibility", [
+    assertion(record?.visibility === "MANAGEMENT", "management visibility is retained"),
+    assertion(record?.type === "CURRENT_OPERATIONAL_DATA", "epistemic type is retained"),
+    assertion(record?.contentText?.includes("Current plans") === true, "document content is bounded and normalized"),
+    assertion(knowledgeApiPath("document", "pricing-current") === "/api/v1/documents/pricing-current", "source path uses the typed v2 resource"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-finance"], publicMessageCount: 1, jobsCreated: 0, terminalReason: "knowledge_v2_provenance",
+  }, [
+    "PASS: Knowledge records retain visibility and epistemic metadata",
+    "PASS: no restricted data is introduced by the normalizer",
+  ]));
+}
+
+{
+  const proposal = normalizeKnowledgeRecord({
+    id: "old-proposal", kind: "document", title: "Future proposal", visibility: "INTERNAL",
+    type: "PROPOSAL", updatedAt: "2025-01-01T00:00:00.000Z", content: "A possible future direction.",
+  });
+  const current = normalizeKnowledgeRecord({
+    id: "current-decision", kind: "item", title: "Current decision", visibility: "MANAGEMENT",
+    type: "DECISION", updatedAt: "2026-08-22T09:00:00.000Z", content: "The current decision is recorded here.",
+  });
+  results.push(evaluate("knowledge-v2-current-vs-proposal", [
+    assertion(proposal?.type === "PROPOSAL", "proposal remains explicitly classified"),
+    assertion(current?.type === "DECISION", "current decision remains explicitly classified"),
+    assertion(proposal?.type !== current?.type, "conflicting truth classes are not flattened"),
+    "PASS: current-state grounding can reject proposal-only evidence",
+  ], {
+    turnCount: 1, selectedAgents: ["agent-heretic"], publicMessageCount: 1, jobsCreated: 0, terminalReason: "knowledge_v2_evidence_precedence",
+  }, [
+    "PASS: newer does not automatically erase historical context",
+    "PASS: proposal is not silently presented as current reality",
+  ]));
+}
+
+{
+  const stale = {
+    type: "knowledge_v2_item" as const,
+    sourceId: "stale-current-record",
+    title: "Expired operational snapshot",
+    pathOrUrl: "/api/v1/items/stale-current-record",
+    excerpt: "The current operational snapshot says activation is the main problem.",
+    authority: 100,
+    score: 1,
+    updatedAt: "2025-01-01T00:00:00.000Z",
+    provenance: { sourceKind: "knowledge_v2", epistemicType: "CURRENT_OPERATIONAL_DATA", reviewAfter: "2000-01-01T00:00:00.000Z" },
+  };
+  const assessment = assessCurrentStateGrounding("Our main problem is activation.", {
+    query: "current problem", items: [stale], totalCharacters: stale.excerpt.length, truncated: false,
+    telemetry: { queryIntent: "official_factual", retrievalCount: 1, sourceTypeCounts: { knowledge_v2_item: 1 }, officialKnowledgeCount: 1, agentDocumentCount: 0, sharedDocumentCount: 0, totalRetrievedCharacters: stale.excerpt.length, contextTruncated: false, acquisitionOperations: 0, selectedSources: [] },
+  });
+  results.push(evaluate("knowledge-v2-freshness", [
+    assertion(!assessment.supported, "expired current-state evidence cannot establish a present ranking"),
+    assertion(assessment.state === "qualified", "stale evidence produces qualification rather than fabricated certainty"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-heretic"], publicMessageCount: 1, jobsCreated: 0, terminalReason: "stale_evidence_qualified",
+  }, [
+    "PASS: reviewAfter is honored for current-state grounding",
+    "PASS: stale evidence remains available as historical context",
   ]));
 }
 

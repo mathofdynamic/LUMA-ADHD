@@ -31,6 +31,12 @@ Agent configuration edits, pause/resume, thread transitions, bounded continuatio
 
 The manual GOD action only enqueues one coarse `god.review` job. It does not execute a model call inside the HTTP request.
 
+## Knowledge v2 observability
+
+Authenticated `GET /api/admin/knowledge-v2` and the Knowledge block in System expose only safe operational metadata: configured base URL, effective `management` scope, cache counts by kind and visibility, last attempted/successful/full/incremental sync, changes cursor, manifest/count summary, API-call counters, and the last normalized error. The bearer token, private record bodies, media bytes, and provider URLs are never returned.
+
+The authenticated CSRF-protected `POST /api/admin/knowledge-v2/sync` action accepts `incremental` or `full` and queues one bounded job. Incremental is the normal operator action; full reconciliation is for catalog drift or removal checks. A successful sync preserves provenance/freshness and the cache remains usable during a later outage.
+
 ## Settings
 
 Settings are typed D1 overrides. They include burst/deep-work bounds, scheduler budget, knowledge/GOD cadence, RAG acquisition steps, context budget, and recent-message count. Server-side validation enforces the minimum and maximum for every setting; code-level safety ceilings remain authoritative.
@@ -39,6 +45,6 @@ The page displays provider and credential status only. It never displays API key
 
 ## Deployment and recovery
 
-Apply migration `0007_admin_observatory.sql`, install `ADMIN_AUTH_SECRET` with Wrangler secret storage, and deploy the Worker. Telegram group, administrator, and bot-identity values are intentionally not committed to `wrangler.jsonc`; preserve the live values with the existing operator bootstrap/deployment tooling rather than deploying empty placeholders. If the admin secret is rotated, all existing sessions expire on their next authenticated request. The operator can log in again with the new key; no D1 session cleanup is required for correctness.
+Apply all migrations through `0011_knowledge_v2.sql`, install `ADMIN_AUTH_SECRET` and the existing management-scoped `LUMA_KNOWLEDGE_API_TOKEN` with Wrangler secret storage, and deploy the Worker. Telegram group, administrator, and bot-identity values are intentionally not committed to `wrangler.jsonc`; preserve the live values with the existing operator bootstrap/deployment tooling rather than deploying empty placeholders. If the admin secret is rotated, all existing sessions expire on their next authenticated request. The operator can log in again with the new key; no D1 session cleanup is required for correctness.
 
 The Admin Observatory uses Workers, D1, Queue, Cron, and Worker Static Assets only. It does not require KV, R2, Durable Objects, Workflows, Redis, PostgreSQL, or an external authentication service.

@@ -9,6 +9,8 @@ import type { JsonObject } from "../database/validation";
 export type MemoryItemType =
   | "document"
   | "knowledge_chunk"
+  | "knowledge_v2_item"
+  | "knowledge_v2_chunk"
   | "message"
   | "thread_summary"
   | "decision"
@@ -31,7 +33,7 @@ export interface ContextPackItem {
   readonly updatedAt: string;
   readonly threadId?: ThreadId | null;
   readonly ownerAgentId?: AgentId | null;
-  readonly provenance: Readonly<Record<string, string | number | null>>;
+  readonly provenance: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 export interface ContextPack {
@@ -59,6 +61,15 @@ export interface ContextPackTelemetry {
     readonly pathOrUrl: string | null;
     readonly authority: number;
   }[];
+  readonly knowledgeV2CacheCount?: number;
+  readonly knowledgeV2LiveSearchUsed?: boolean;
+  readonly knowledgeV2ItemsSelected?: number;
+  readonly knowledgeV2Kinds?: readonly string[];
+  readonly knowledgeV2FreshestUpdatedAt?: string | null;
+  readonly knowledgeV2Stale?: boolean;
+  readonly knowledgeV2MediaSelected?: number;
+  readonly knowledgeV2ImagesDelivered?: number;
+  readonly knowledgeV2ApiLatencyMs?: number | null;
 }
 
 export interface DocumentCreateRequest {

@@ -47,7 +47,7 @@ npx wrangler d1 migrations apply luma-adhd --remote
 npx wrangler d1 migrations list luma-adhd --remote
 ```
 
-Phase 08 adds migration `0009_hardening_deployment.sql`. It creates only the indexed job-type/creation-time lookup used by the bounded internal daily safety budgets. Do not edit migrations 0000–0009 after they are applied. The Luna migration adds no database migration.
+Phase 08 adds migration `0009_hardening_deployment.sql`; the diversity hardening adds `0010_agent_diversity_autonomy.sql`, and Knowledge v2 adds `0011_knowledge_v2.sql` for a small derived cache/FTS schema. Do not edit migrations 0000–0011 after they are applied. The Luna migration itself adds no database migration.
 
 ## Production secrets
 
@@ -68,6 +68,7 @@ NEBULA_API_KEY
 OPENAI_API_KEY
 GOD_API_KEY
 ADMIN_AUTH_SECRET
+LUMA_KNOWLEDGE_API_TOKEN
 ```
 
 There is deliberately no `TELEGRAM_GOD_BOT_TOKEN`. GOD is `agent-god` internally and uses the gateway transport for public summaries.
@@ -98,6 +99,7 @@ GOD_PROVIDER=openai
 GOD_BASE_URL=https://api.openai.com/v1
 GOD_MODEL=gpt-5.6-luna
 GOD_REASONING_EFFORT=xhigh
+LUMA_KNOWLEDGE_BASE_URL=https://luma-knowledge.pages.dev/api/v1
 LUMA_ENVIRONMENT
 LUMA_PHASE
 ```
@@ -114,9 +116,13 @@ Telegram identity metadata contains bot IDs/usernames only. The gateway is the o
 
 The gateway-only topology is preserved across normal Worker deploys. Do not reinstall webhooks unless a deliberate topology check proves it is necessary.
 
-## Initial knowledge
+## Knowledge v2 bootstrap
 
-The application owns the 12-source official LUMA allowlist and bounded sync jobs. Use the authenticated Admin Knowledge action or the existing operator sync tooling. Do not inject source/chunk rows manually with SQL. Verify 12 configured sources, cached normalized content/chunks, and that an unchanged resync does not rewrite chunks.
+The normal Knowledge path is the authenticated v2 catalog at `LUMA_KNOWLEDGE_BASE_URL`. `LUMA_KNOWLEDGE_API_TOKEN` must be the existing `knowledge:read:management` service credential. Do not print or copy its value. The token may read `PUBLIC`, `INTERNAL`, and `MANAGEMENT`; `RESTRICTED` must remain unavailable.
+
+After migration `0011_knowledge_v2.sql` is applied, use the authenticated Admin **Sync Knowledge Now** action or queue one bounded `knowledge.sync_v2` job. The first successful run performs a paginated full reconciliation; later runs use the updated-at `/changes` snapshot. A periodic full reconciliation handles removals. Do not insert Knowledge rows manually with SQL. Verify manifest/catalog counts, cache counts by kind/visibility, last successful sync, cursor, and that media metadata contains no bytes or provider URL secrets. The twelve legacy Markdown sources remain a narrow compatibility fallback, not a second equal catalog.
+
+The legacy twelve-source allowlist remains a compatibility fallback. When the v2 credential is configured, the scheduler uses the authenticated Knowledge v2 catalog and does not create one job per legacy source. Do not inject source/chunk rows manually with SQL.
 
 ## Admin access
 
@@ -142,8 +148,9 @@ Post-deploy smoke, in order:
 4. Verify gateway webhook health, persona webhook count 0, and no GOD webhook.
 5. Confirm Admin Providers shows normal Agents as OpenAI `gpt-5.6-luna` / `medium`, GOD as OpenAI `gpt-5.6-luna` / `xhigh`, and Nebula as configured fallback/inactive where applicable.
 6. Inspect one existing normal Agent result and official-LUMA RAG provenance.
-7. Inspect existing Human Tasks, files, reputation, GOD, knowledge, Jobs, and System state.
-8. Confirm source-only diagram artifacts remain inspectable.
+7. Inspect Knowledge v2 health/scope/cache state in Admin System. Verify one PUBLIC, one INTERNAL or MANAGEMENT record, people/entities metadata, and media metadata without exposing private content.
+8. Inspect existing Human Tasks, files, reputation, GOD, knowledge, Jobs, and System state.
+9. Confirm source-only diagram artifacts remain inspectable.
 
 Live provider/GOD/Telegram calls are expensive and are not part of `npm run verify`. Use `npm run openai:luna:smoke` for a non-persistent normal/GOD Responses contract smoke. When remote-D1 runtime telemetry must be verified without Telegram projection, run `powershell -File .\scripts\openai-luna-runtime-smoke.ps1`; it creates and deletes a temporary operator-only Worker. Do not run a full GOD review solely to verify configuration.
 

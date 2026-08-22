@@ -32,6 +32,8 @@ export interface AdminApiEnvironment extends Partial<Omit<TelegramRuntimeEnv, "D
   readonly GOD_REASONING_EFFORT?: string;
   readonly NEBULA_MODEL?: string;
   readonly NEBULA_API_KEY?: string;
+  readonly LUMA_KNOWLEDGE_API_TOKEN?: string;
+  readonly LUMA_KNOWLEDGE_BASE_URL?: string;
 }
 
 interface JsonBody {
@@ -190,6 +192,9 @@ async function requireAuthenticated(
       adminConfigured: Boolean(environment.ADMIN_AUTH_SECRET),
       telegramGroupId: environment.TELEGRAM_GROUP_ID,
       telegramApplication,
+      knowledgeBaseUrl: environment.LUMA_KNOWLEDGE_BASE_URL ?? "https://luma-knowledge.pages.dev/api/v1",
+      knowledgeConfigured: Boolean(environment.LUMA_KNOWLEDGE_API_TOKEN?.trim()),
+      knowledgeScope: environment.LUMA_KNOWLEDGE_API_TOKEN?.trim() ? "management" : "not configured",
     }),
   };
 }
@@ -343,6 +348,15 @@ async function handleAuthenticated(
     const job = await services.createKnowledgeSyncJob(id);
     await queueJob(environment, services, job);
     await services.audit(session.id, "knowledge.refresh_queued", "knowledge_source", id, { jobId: job.id });
+    return response({ state: "queued", job });
+  }
+  if (resource === "knowledge-v2" && request.method === "GET" && !id) return response(await services.listSystem().then((system) => system.knowledgeV2 as JsonObject));
+  if (resource === "knowledge-v2" && id === "sync" && request.method === "POST") {
+    const body = await readJson(request);
+    const mode = stringField(body, "mode") === "full" ? "full" : "incremental";
+    const job = await services.createKnowledgeV2SyncJob(mode);
+    await queueJob(environment, services, job);
+    await services.audit(session.id, `knowledge_v2.${mode}_queued`, "knowledge_v2", "default", { jobId: job.id });
     return response({ state: "queued", job });
   }
 

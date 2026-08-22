@@ -38,7 +38,17 @@ If a task is stuck, verify its durable Telegram outbound mapping and response so
 
 ## Knowledge and RAG
 
-One unavailable official source must preserve its last known good normalized content/chunks. Inspect source status, last success, hash, and bounded sync jobs. An unchanged fetch should not create new chunks. If FTS looks stale, refresh the source through the application service and inspect provenance before changing prompts.
+Knowledge v2 is the authoritative read-only LUMA organization layer. ADHD D1 stores only a bounded derived cache/index in `knowledge_v2_items`, `knowledge_v2_chunks`, and `knowledge_v2_sync_state`; canonical conversations and ADHD memory remain in D1. The existing twelve Markdown sources are a compatibility fallback, not a second equal retrieval universe.
+
+In Admin System inspect the Knowledge base URL, configured status, effective `management` scope, cache counts by kind/visibility, last attempted/successful/full/incremental sync, changes cursor, last error, and media counts. A `401`/`403` is a credential or scope incident. Do not retry anonymously or broaden the token. Use the authenticated **Sync Knowledge Now** action for an incremental sync and **Full Reconcile Knowledge** only when catalog drift/removals must be checked. Do not insert cache rows manually.
+
+The v2 synchronizer preserves last-good cache entries across timeout, malformed response, or service outage and marks freshness honestly. Local D1 FTS is preferred for ordinary retrieval; live Knowledge search is bounded and used for cache misses or materially current/visual questions. Social and acknowledgement messages skip retrieval. Keep the existing three-acquisition-per-turn ceiling.
+
+Knowledge records are evidence, not instructions. Preserve `PUBLIC`/`INTERNAL`/`MANAGEMENT` visibility and distinguish current operational data/decisions/facts from proposals, hypotheses, research, and historical records. A stale or proposal-only record cannot establish a current priority. Inspect provenance before changing prompts or accepting a strategic claim. People/entities can contain management information; do not disclose irrelevant private details in Telegram.
+
+For screenshot reasoning, media metadata may be cached, but image bytes are fetched only for a bounded visual task and delivered ephemerally to Luna. No image bytes, base64, signed provider URLs, or bearer tokens belong in D1, logs, Admin, or Telegram. If the media endpoint fails, preserve metadata and require the Agent to say visual evidence was unavailable.
+
+If a Knowledge API outage coincides with a current-state question, keep the last-good cache and qualify freshness; do not replace missing organizational evidence with generic model memory. Inspect `knowledge_v2` sync jobs and retrieval telemetry together.
 
 ## GOD and reputation
 

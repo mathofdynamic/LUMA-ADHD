@@ -19,6 +19,7 @@ import { ReputationService } from "../reputation/service";
 import { GodReviewService } from "../god/service";
 import { ReputationScheduler } from "../reputation/scheduler";
 import { GodScheduler } from "../god/scheduler";
+import { createLumaKnowledgeClient } from "../knowledge/client";
 
 export interface AgentRuntimeEnvironment {
   readonly DB: D1Database;
@@ -48,6 +49,8 @@ export interface AgentRuntimeEnvironment {
   readonly GOD_BASE_URL?: string;
   readonly GOD_MODEL?: string;
   readonly GOD_REASONING_EFFORT?: string;
+  readonly LUMA_KNOWLEDGE_API_TOKEN?: string;
+  readonly LUMA_KNOWLEDGE_BASE_URL?: string;
 }
 
 const GOD_REASONING_EFFORTS: readonly LLMReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -128,6 +131,7 @@ export function createAgentRuntime(
     provider,
     modelKey: normalConfig.model,
     reasoningEffort: normalConfig.reasoningEffort,
+    knowledgeClient: createLumaKnowledgeClient(env),
   });
   const reputation = new ReputationService({ repositories, now: options?.now });
   const telegramConfig = parseTelegramConfig(env);
@@ -173,6 +177,7 @@ export function createGodReviewService(
     provider,
     modelKey: env.GOD_MODEL,
     reasoningEffort: parseGodReasoningEffort(env.GOD_REASONING_EFFORT),
+    knowledgeClient: createLumaKnowledgeClient(env),
   });
   const telegramConfig = parseTelegramConfig(env);
   const telegram = createTelegramApplication({
@@ -209,7 +214,7 @@ export function createKnowledgeScheduler(
   env: AgentRuntimeEnvironment & { readonly AGENT_JOBS: AgentJobQueue },
   options?: { readonly now?: () => string },
 ): KnowledgeScheduler {
-  return new KnowledgeScheduler(createRepositories(env.DB), env.AGENT_JOBS, options?.now);
+  return new KnowledgeScheduler(createRepositories(env.DB), env.AGENT_JOBS, options?.now, undefined, Boolean(env.LUMA_KNOWLEDGE_API_TOKEN?.trim()));
 }
 
 export function createReputationScheduler(

@@ -4,6 +4,7 @@ import { FOUNDATION_GUARDRAILS } from "../guardrails";
 import { RuntimeProviderFailure } from "../agents/runtime";
 import { createMemoryServices } from "../memory";
 import { ReputationService } from "../reputation/service";
+import { createLumaKnowledgeClient } from "../knowledge/client";
 
 export interface AgentJobMessage {
   readonly kind: "agent.job" | "foundation.noop";
@@ -47,7 +48,7 @@ export async function consumeAgentJobs(
 ): Promise<void> {
   const runtime = createAgentRuntime(env);
   const repositories = runtime.repositories;
-  const memory = createMemoryServices(repositories);
+  const memory = createMemoryServices(repositories, { knowledgeClient: createLumaKnowledgeClient(env) });
   const reputation = new ReputationService({ repositories });
   const godReview = createGodReviewService(env);
 
@@ -75,7 +76,7 @@ export async function consumeAgentJobs(
     }
 
     try {
-      if (claimed.jobType === "knowledge.sync_source") {
+      if (claimed.jobType === "knowledge.sync_source" || claimed.jobType === "knowledge.sync_v2" || claimed.jobType === "knowledge.full_reconcile") {
         await memory.knowledge.processJob(claimed);
       } else if (claimed.jobType === "reputation.daily_score" || claimed.jobType === "reputation.off_cycle_score") {
         const scoringDay = typeof claimed.payload.scoringDay === "string" ? claimed.payload.scoringDay : undefined;

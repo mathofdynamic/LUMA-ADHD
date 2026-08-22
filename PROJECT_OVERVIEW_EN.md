@@ -232,6 +232,8 @@ Because the application must remain compatible with the Cloudflare Free plan, th
 
 All agents should have access to LUMA's official internal knowledge documents.
 
+The production integration is now the authenticated LUMA Knowledge v2 catalog at `https://luma-knowledge.pages.dev/api/v1`. The twelve Markdown URLs below remain compatibility references, not the complete catalog. ADHD stores only a bounded derived retrieval cache in D1; Knowledge remains authoritative for LUMA organizational records, documents, people, entities, decisions, and curated media. Visibility is enforced at the service boundary: the ADHD identity may read PUBLIC, INTERNAL, and MANAGEMENT records, never RESTRICTED. Screenshot binaries are not stored in ADHD; relevant authorized media is delivered ephemerally to the existing Luna multimodal path with provenance and freshness metadata.
+
 Primary sources:
 
 - LUMA Internal Master Document: https://luma-knowledge.pages.dev/k/luma.md

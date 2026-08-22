@@ -6,6 +6,8 @@ import { sha256Hex } from "./util";
 import { chunkMarkdown, markdownTitle, normalizeMarkdown } from "./markdown";
 import { OFFICIAL_LUMA_SOURCES, officialSourceByKey } from "./sources";
 import type { KnowledgeSyncResult } from "../memory/types";
+import type { KnowledgeV2Service } from "./v2-service";
+import type { JsonObject } from "../database/validation";
 
 const MAX_SOURCE_BYTES = 1_000_000;
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1_000;
@@ -16,6 +18,7 @@ export interface KnowledgeSyncServiceOptions {
   readonly fetcher?: typeof fetch;
   readonly now?: () => string;
   readonly timeoutMs?: number;
+  readonly knowledgeV2?: KnowledgeV2Service;
 }
 
 async function readBoundedText(response: Response): Promise<string> {
@@ -51,6 +54,7 @@ export class KnowledgeSyncService {
   private readonly fetcher: typeof fetch;
   private readonly now: () => string;
   private readonly timeoutMs: number;
+  private readonly knowledgeV2?: KnowledgeV2Service;
 
   constructor(private readonly repositories: Repositories, options: KnowledgeSyncServiceOptions = {}) {
     // Cloudflare's global fetch is a receiver-bound platform function. Keep
@@ -58,6 +62,7 @@ export class KnowledgeSyncService {
     this.fetcher = (options.fetcher ?? fetch).bind(globalThis);
     this.now = options.now ?? nowIso;
     this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.knowledgeV2 = options.knowledgeV2;
   }
 
   async ensureOfficialSources(): Promise<void> {
@@ -169,7 +174,29 @@ export class KnowledgeSyncService {
     }
   }
 
-  async processJob(job: JobRecord): Promise<KnowledgeSyncResult | null> {
+  async processJob(job: JobRecord): Promise<KnowledgeSyncResult | JsonObject | null> {
+    if (job.jobType === "knowledge.sync_v2" || job.jobType === "knowledge.full_reconcile") {
+      if (!this.knowledgeV2) throw new ValidationError("Knowledge v2 is not configured");
+      const mode = job.jobType === "knowledge.full_reconcile" || job.payload.mode === "full" ? "full" : "incremental";
+      await this.repositories.events.append({
+        eventType: "knowledge_v2_sync_started", aggregateType: "knowledge_v2", aggregateId: "default",
+        jobId: job.id, idempotencyKey: `knowledge-v2-sync-started:${job.id}`, payload: { mode },
+      });
+      try {
+        const result = await this.knowledgeV2.sync(mode);
+        await this.repositories.events.append({
+          eventType: "knowledge_v2_sync_succeeded", aggregateType: "knowledge_v2", aggregateId: "default",
+          jobId: job.id, idempotencyKey: `knowledge-v2-sync-succeeded:${job.id}`, payload: result,
+        });
+        return result;
+      } catch (error: unknown) {
+        await this.repositories.events.append({
+          eventType: "knowledge_v2_sync_failed", aggregateType: "knowledge_v2", aggregateId: "default",
+          jobId: job.id, idempotencyKey: `knowledge-v2-sync-failed:${job.id}`, payload: { mode, error: error instanceof Error ? error.name : "sync_failure" },
+        }).catch(() => undefined);
+        throw error;
+      }
+    }
     if (job.jobType !== "knowledge.sync_source") return null;
     const value = job.payload.sourceKey;
     if (typeof value !== "string") throw new ValidationError("knowledge sync job is missing sourceKey");

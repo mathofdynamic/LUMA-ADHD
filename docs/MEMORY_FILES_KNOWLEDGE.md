@@ -17,7 +17,7 @@ Paths are absolute, NFC-normalized, slash-normalized, bounded, traversal-safe, a
 
 ## Retrieval and memory
 
-`institutional_memory_fts` is the v1 retrieval index. It covers active documents, official knowledge chunks, public/internal messages, thread summaries, decisions, and concise memory notes. FTS terms are normalized and quoted before querying; malformed or empty input returns no results. Results are bounded and then scored using text relevance, authority, recency, thread relationship, owner relationship, and tags.
+`institutional_memory_fts` is the bounded retrieval index. It covers active documents, legacy official knowledge chunks, Knowledge v2 items/document chunks, public/internal messages, thread summaries, decisions, and concise memory notes. FTS terms are normalized and quoted before querying; malformed or empty input returns no results. Results are bounded and then scored using text relevance, authority, recency, thread relationship, owner relationship, visibility, and tags.
 
 Context packs are bounded and carry provenance. Normal-agent retrieval is automatic before every meaningful turn and uses query-aware source budgeting: official LUMA knowledge receives a reserved high-priority budget for factual product/company questions, while thread summaries and recent/replied context receive more weight for discussion continuation. Complete histories are never inserted automatically. Memory notes contain durable facts and conclusions only; hidden reasoning is not stored.
 
@@ -29,7 +29,11 @@ Thread summaries are compacted after a configurable number of new messages or an
 
 ## Official LUMA knowledge
 
-The allowlist in `src/knowledge/sources.ts` contains the 12 official Markdown URLs from the project overview. The synchronizer fetches only those exact URLs, bounds response size and time, honors ETag/Last-Modified where available, hashes normalized Markdown, and skips chunk rewrites when content is unchanged. Markdown is chunked by heading and paragraph boundaries. A failed refresh records the failure while preserving the last good normalized content and chunks.
+The primary integration is `LumaKnowledgeClient` against `https://luma-knowledge.pages.dev/api/v1`. `knowledge_v2_items`, `knowledge_v2_chunks`, and `knowledge_v2_sync_state` form a replaceable derived cache/index for paginated items, documents, people, entities, media metadata, provenance, visibility, hashes, and freshness. The service token is server-side and management-scoped; only PUBLIC, INTERNAL, and MANAGEMENT records are cached. The API remains authoritative.
+
+The first v2 sync performs a bounded full reconciliation. Later jobs use the updated-at `/changes` snapshot, with periodic full reconciliation for catalog drift. A failed refresh records the error and preserves last-good cache entries. Local FTS is used first; live search is reserved for relevant cache misses or materially current/visual questions. The existing twelve-source allowlist remains a narrow compatibility fallback and is not scheduled as a second equal universe when v2 is configured.
+
+The v2 cache retains epistemic type, authority, status, updated/review timestamps, visibility, and source API paths. Current operational records and decisions outrank stale proposals, hypotheses, research, and historical records for current-state questions. Media is metadata-only in D1; image bytes are fetched through the authenticated Knowledge content endpoint, validated, delivered ephemerally to Luna, and discarded.
 
 The scheduler creates at most one due `knowledge.sync_source` job per tick. Queue consumption processes that coarse job through `KnowledgeSyncService`; it does not create a micro-step queue.
 
