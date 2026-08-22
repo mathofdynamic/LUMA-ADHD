@@ -21,12 +21,12 @@ export interface RetrievalSearchOptions {
 export type RetrievalIntent = "official_factual" | "discussion" | "workspace" | "mixed";
 
 const SEARCHABLE_SOURCE_KINDS: readonly MemoryItemType[] = [
-  "document", "knowledge_chunk", "message", "thread_summary", "decision", "memory_note",
+  "document", "knowledge_chunk", "knowledge_v2_item", "knowledge_v2_chunk", "message", "thread_summary", "decision", "memory_note",
 ];
 
 export function classifyRetrievalIntent(query: string): RetrievalIntent {
   const normalized = query.normalize("NFC").toLocaleLowerCase();
-  const officialSubject = /(?:\b(?:luma|pricing|subscription|workflow|capabilit(?:y|ies)|terms|video)\b|\u0644\u0648\u0645\u0627|\u0642\u06cc\u0645\u062a|\u0627\u0634\u062a\u0631\u0627\u06a9|\u0648\u0631\u06a9\u200c?\u0641\u0644\u0648|\u0642\u0627\u0628\u0644\u06cc\u062a|\u0627\u0628\u0632\u0627\u0631|\u0642\u0648\u0627\u0646\u06cc\u0646|\u0634\u0631\u0627\u06cc\u0637|\u0648\u06cc\u062f\u06cc\u0648)/u.test(normalized);
+  const officialSubject = /(?:\b(?:luma|pricing|subscription|workflow|capabilit(?:y|ies)|terms|video|team|people|board|management|organization|product|dashboard|screenshot)\b|\u0644\u0648\u0645\u0627|\u0642\u06cc\u0645\u062a|\u0627\u0634\u062a\u0631\u0627\u06a9|\u0648\u0631\u06a9\u200c?\u0641\u0644\u0648|\u0642\u0627\u0628\u0644\u06cc\u062a|\u0627\u0628\u0632\u0627\u0631|\u0642\u0648\u0627\u0646\u06cc\u0646|\u0634\u0631\u0627\u06cc\u0637|\u0648\u06cc\u062f\u06cc\u0648|\u062a\u06cc\u0645|\u0645\u062f\u06cc\u0631\u06cc\u062a|\u0633\u0627\u0632\u0645\u0627\u0646|\u0645\u062d\u0635\u0648\u0644|\u062f\u0627\u0634\u0628\u0648\u0631\u062f|\u0627\u0633\u06a9\u0631\u06cc\u0646)/u.test(normalized);
   const officialQuestion = officialSubject && /(?:\u0686\u06cc\u0633\u062a|\u0686\u06cc\u0647|\u0686\u06cc\s+(?:\u0647\u0633\u062a|\u0627\u0633\u062a)|what\s+is|what\s+does)/iu.test(normalized);
   const official = officialSubject || officialQuestion;
   const discussion = /(?:\b(?:thread|discussion|proposal|risk|continue|reply|decision)\b|\u0627\u06cc\u0646\s+\u0628\u062d\u062b|\u067e\u06cc\u0634\u0646\u0647\u0627\u062f|\u0631\u06cc\u0633\u06a9|\u0627\u062f\u0627\u0645\u0647|\u062a\u0635\u0645\u06cc\u0645)/u.test(normalized);
@@ -74,6 +74,8 @@ function excerpt(content: string, terms: readonly string[]): string {
 
 function itemType(sourceKind: string): MemoryItemType {
   if (sourceKind === "knowledge_chunk") return "knowledge_chunk";
+  if (sourceKind === "knowledge_v2_item") return "knowledge_v2_item";
+  if (sourceKind === "knowledge_v2_chunk") return "knowledge_v2_chunk";
   if (sourceKind === "thread_summary") return "thread_summary";
   if (sourceKind === "decision") return "decision";
   if (sourceKind === "memory_note") return "memory_note";
@@ -94,6 +96,12 @@ interface SearchRow {
   owner_agent_id: string | null;
   document_scope: string | null;
   knowledge_url: string | null;
+  knowledge_v2_visibility: string | null;
+  knowledge_v2_kind: string | null;
+  knowledge_v2_type: string | null;
+  knowledge_v2_status: string | null;
+  knowledge_v2_review_after: string | null;
+  knowledge_v2_item_id: string | null;
   bm25_score: number;
 }
 
@@ -119,12 +127,21 @@ export class InstitutionalMemorySearch {
               COALESCE(d.thread_id, ts.thread_id, dr.thread_id, mn.thread_id, m.thread_id) AS thread_id,
               COALESCE(d.owner_agent_id, mn.agent_id) AS owner_agent_id,
               d.scope AS document_scope,
-              ks.uri AS knowledge_url,
+              COALESCE(ks.uri, v2i.source_api_url, v2c_item.source_api_url) AS knowledge_url,
+              COALESCE(v2i.visibility, v2c_item.visibility) AS knowledge_v2_visibility,
+              COALESCE(v2i.kind, v2c_item.kind) AS knowledge_v2_kind,
+              COALESCE(v2i.item_type, v2c_item.item_type) AS knowledge_v2_type,
+              COALESCE(v2i.status, v2c_item.status) AS knowledge_v2_status,
+              COALESCE(v2i.review_after, v2c_item.review_after) AS knowledge_v2_review_after,
+              COALESCE(v2i.item_id, v2c_item.item_id) AS knowledge_v2_item_id,
               bm25(institutional_memory_fts) AS bm25_score
        FROM institutional_memory_fts f
        LEFT JOIN documents d ON f.source_kind = 'document' AND d.id = f.source_id
        LEFT JOIN knowledge_chunks kc ON f.source_kind = 'knowledge_chunk' AND kc.id = f.source_id
        LEFT JOIN knowledge_sources ks ON kc.source_id = ks.id
+       LEFT JOIN knowledge_v2_items v2i ON f.source_kind = 'knowledge_v2_item' AND v2i.cache_key = f.source_id
+       LEFT JOIN knowledge_v2_chunks v2c ON f.source_kind = 'knowledge_v2_chunk' AND v2c.id = f.source_id
+       LEFT JOIN knowledge_v2_items v2c_item ON v2c.item_cache_key = v2c_item.cache_key
        LEFT JOIN thread_summaries ts ON f.source_kind = 'thread_summary' AND ts.id = f.source_id
        LEFT JOIN decision_records dr ON f.source_kind = 'decision' AND dr.id = f.source_id
        LEFT JOIN memory_notes mn ON f.source_kind = 'memory_note' AND mn.id = f.source_id
@@ -138,6 +155,8 @@ export class InstitutionalMemorySearch {
                WHERE ds.document_id = d.id AND ds.agent_id = ? AND ds.revoked_at IS NULL
              ) OR (d.scope = 'thread' AND d.thread_id = ?)))
            OR (f.source_kind = 'knowledge_chunk' AND ks.status <> 'archived' AND ks.normalized_content IS NOT NULL)
+           OR (f.source_kind = 'knowledge_v2_item' AND v2i.deleted_at IS NULL AND v2i.stale = 0 AND v2i.visibility IN ('PUBLIC', 'INTERNAL', 'MANAGEMENT'))
+           OR (f.source_kind = 'knowledge_v2_chunk' AND v2c_item.deleted_at IS NULL AND v2c_item.stale = 0 AND v2c_item.visibility IN ('PUBLIC', 'INTERNAL', 'MANAGEMENT'))
            OR (f.source_kind = 'message' AND m.deleted_at IS NULL AND m.visibility <> 'private'
              AND (? IS NULL OR m.thread_id = ?))
            OR (f.source_kind = 'thread_summary' AND ts.id IS NOT NULL
@@ -172,6 +191,13 @@ export class InstitutionalMemorySearch {
             sourceKind: row.source_kind, authority: row.authority, matchedTerms: terms.join(" "),
             ...(row.knowledge_url ? { sourceUrl: row.knowledge_url } : {}),
             ...(row.document_scope ? { scope: row.document_scope } : {}),
+            ...(row.knowledge_v2_visibility ? { visibility: row.knowledge_v2_visibility } : {}),
+            ...(row.knowledge_v2_kind ? { kind: row.knowledge_v2_kind } : {}),
+            ...(row.knowledge_v2_kind ? { media: row.knowledge_v2_kind.toLocaleLowerCase().includes("media") } : {}),
+            ...(row.knowledge_v2_type ? { epistemicType: row.knowledge_v2_type } : {}),
+            ...(row.knowledge_v2_status ? { status: row.knowledge_v2_status } : {}),
+            ...(row.knowledge_v2_review_after ? { reviewAfter: row.knowledge_v2_review_after } : {}),
+            ...(row.knowledge_v2_item_id ? { knowledgeItemId: row.knowledge_v2_item_id } : {}),
           },
         } satisfies RetrievalResult;
       })
@@ -186,7 +212,7 @@ export class ContextPackService {
   private readonly decisions: DecisionRecordRepository;
   private readonly summaries: ThreadSummaryRepository;
 
-  constructor(private readonly database: DatabaseClient) {
+  constructor(private readonly database: DatabaseClient, private readonly knowledgeV2?: import("../knowledge/v2-service").KnowledgeV2Service) {
     this.searchService = new InstitutionalMemorySearch(database);
     this.notes = new MemoryNoteRepository(database);
     this.decisions = new DecisionRecordRepository(database);
@@ -248,21 +274,46 @@ export class ContextPackService {
       agentId: input.actor?.agentId,
       threadId: input.threadId,
       topK: Math.min(16, Math.max(1, topK * 2)),
-      sourceKinds: ["document", "message", "thread_summary", "decision", "memory_note"],
+      sourceKinds: ["document", "knowledge_v2_item", "knowledge_v2_chunk", "message", "thread_summary", "decision", "memory_note"],
     });
     const official = queryIntent === "official_factual" || queryIntent === "mixed"
       ? await this.searchService.search(input.query, {
         agentId: input.actor?.agentId,
         threadId: input.threadId,
         topK: Math.min(8, Math.max(1, topK)),
-        sourceKinds: ["knowledge_chunk"],
+        sourceKinds: ["knowledge_chunk", "knowledge_v2_item", "knowledge_v2_chunk"],
       })
       : [];
     candidates.push(...retrieved, ...official);
-    const deduped = [...new Map(candidates.map((item) => [`${item.type}:${item.sourceId}`, item])).values()]
+    const currentState = /(?:current|today|latest|now|فعلی|امروز|الان|جدیدترین)/iu.test(input.query);
+    const visual = /(?:screenshot|screen|ui|ux|dashboard|تصویر|اسکرین|رابط|صفحه)/iu.test(input.query);
+    // Explicit current/visual questions should get a bounded live snapshot even
+    // when the derived cache has a matching hit. The Knowledge service exposes
+    // updated-at semantics rather than a complete revision log, so a local hit
+    // alone cannot prove freshness. The v2 service shares this search across
+    // Agents in the same bounded turn and keeps ordinary cached queries local.
+    const shouldUseLiveKnowledgeV2 = Boolean(this.knowledgeV2?.configured) && (
+      currentState || visual || queryIntent === "official_factual" || queryIntent === "mixed"
+    );
+    const knowledgeV2 = shouldUseLiveKnowledgeV2
+      ? await this.knowledgeV2!.searchForContext({
+        query: input.query,
+        agentId: input.actor?.agentId,
+        threadId: input.threadId,
+        currentState,
+        visual,
+        limit: Math.min(6, input.topK ?? 8),
+      })
+      : null;
+    if (knowledgeV2) candidates.push(...knowledgeV2.items);
+    // Once v2 has supplied relevant evidence, the legacy 12-source mirror is
+    // only a compatibility fallback and must not create duplicate evidence.
+    const hasKnowledgeV2Evidence = candidates.some((item) => item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk");
+    const candidateUniverse = hasKnowledgeV2Evidence ? candidates.filter((item) => item.type !== "knowledge_chunk") : candidates;
+    const deduped = [...new Map(candidateUniverse.map((item) => [`${item.type}:${item.sourceId}`, item])).values()]
       .sort((left, right) => right.score - left.score || right.updatedAt.localeCompare(left.updatedAt));
     const category = (item: ContextPackItem): "official" | "thread" | "workspace" | "supporting" => {
-      if (item.type === "knowledge_chunk") return "official";
+      if (item.type === "knowledge_chunk" || item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk") return "official";
       if (item.type === "thread_summary" || item.type === "message" || item.type === "decision") return "thread";
       if (item.type === "document" || item.type === "memory_note") return "workspace";
       return "supporting";
@@ -309,7 +360,7 @@ export class ContextPackService {
     let sharedDocumentCount = 0;
     for (const item of items) {
       sourceTypeCounts[item.type] = (sourceTypeCounts[item.type] ?? 0) + 1;
-      if (item.type === "knowledge_chunk") officialKnowledgeCount += 1;
+      if (item.type === "knowledge_chunk" || item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk") officialKnowledgeCount += 1;
       if (item.type === "document") {
         const scope = item.provenance.scope;
         if (scope === "shared") sharedDocumentCount += 1;
@@ -338,6 +389,16 @@ export class ContextPackService {
           pathOrUrl: item.pathOrUrl,
           authority: item.authority,
         })),
+        ...(knowledgeV2 ? {
+          knowledgeV2LiveSearchUsed: knowledgeV2.telemetry.liveSearchUsed,
+          knowledgeV2ItemsSelected: knowledgeV2.telemetry.itemsSelected,
+          knowledgeV2Kinds: knowledgeV2.telemetry.kinds,
+          knowledgeV2FreshestUpdatedAt: knowledgeV2.telemetry.freshestUpdatedAt,
+          knowledgeV2Stale: knowledgeV2.telemetry.stale,
+          knowledgeV2MediaSelected: knowledgeV2.telemetry.mediaSelected,
+          knowledgeV2ImagesDelivered: knowledgeV2.telemetry.imagesDelivered,
+          knowledgeV2ApiLatencyMs: knowledgeV2.telemetry.apiLatencyMs,
+        } : {}),
       },
     };
   }
@@ -345,9 +406,17 @@ export class ContextPackService {
   static toPromptText(pack: ContextPack): string {
     if (pack.items.length === 0) return "none";
     return pack.items.map((item, index) => {
-      const provenance = item.type === "knowledge_chunk"
-        ? "official_luma_knowledge"
-        : item.pathOrUrl ?? item.provenance.sourceKind ?? item.type;
+      const isKnowledge = item.type === "knowledge_chunk" || item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk";
+      if (isKnowledge && (item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk")) {
+        const id = item.provenance.knowledgeItemId ?? item.sourceId;
+        const kind = item.provenance.kind ?? item.type;
+        const epistemicType = item.provenance.epistemicType ?? item.provenance.type ?? "unknown";
+        const visibility = item.provenance.visibility ?? "unknown";
+        const updated = item.provenance.updatedAt ?? item.updatedAt;
+        const status = item.provenance.status ?? "unknown";
+        return `${index + 1}. [KNOWLEDGE] id=${id}; kind=${kind}; type=${epistemicType}; visibility=${visibility}; authority=${item.authority}; updated=${updated}; status=${status}; source=${item.pathOrUrl ?? "api"}\ntitle=${item.title}\nexcerpt=${item.excerpt}`;
+      }
+      const provenance = isKnowledge ? "official_luma_knowledge" : item.pathOrUrl ?? item.provenance.sourceKind ?? item.type;
       return `${index + 1}. [${item.type}; authority=${item.authority}; score=${item.score.toFixed(3)}; source=${provenance}] ${item.title}\n${item.excerpt}`;
     }).join("\n\n");
   }

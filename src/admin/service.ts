@@ -6,6 +6,7 @@ import { createRepositories } from "../database/repositories";
 import { DocumentService } from "../memory/document-service";
 import { InstitutionalMemorySearch } from "../memory/retrieval";
 import { officialSourceByKey } from "../knowledge/sources";
+import { KnowledgeV2Repository } from "../knowledge/v2-repository";
 import { HumanTaskService } from "../human-tasks";
 import { DiagramService } from "../diagrams";
 import { listAdminSettings, resetAdminSetting, setAdminSetting, type AdminSettingKey } from "./settings";
@@ -30,6 +31,9 @@ export interface AdminRuntimeDisplayConfig {
   readonly adminConfigured?: boolean;
   readonly telegramGroupId?: string;
   readonly telegramApplication?: Pick<import("../telegram").TelegramApplicationService, "projectAgentMessage">;
+  readonly knowledgeBaseUrl?: string;
+  readonly knowledgeConfigured?: boolean;
+  readonly knowledgeScope?: string;
 }
 
 function stringValue(value: unknown, fallback = ""): string {
@@ -741,6 +745,16 @@ export class AdminObservatoryService {
     return jsonObject(job);
   }
 
+  async createKnowledgeV2SyncJob(mode: "incremental" | "full" = "incremental"): Promise<JsonObject> {
+    const job = await this.repositories.jobs.create({
+      jobType: mode === "full" ? "knowledge.full_reconcile" : "knowledge.sync_v2",
+      payload: { mode, source: "admin" },
+      idempotencyKey: `admin-knowledge-v2-sync:${mode}:${Math.floor(Date.now() / 900_000)}`,
+      dueAt: nowIso(), priority: 70, maxAttempts: 2,
+    });
+    return jsonObject(job);
+  }
+
   async reputationOverview(domain?: string | null): Promise<readonly JsonObject[]> {
     const normalized = domain?.trim() || null;
     const result = await this.database.prepare(
@@ -883,6 +897,7 @@ export class AdminObservatoryService {
       ...row,
       estimated_cost_usd: estimatedOpenAICostUsd(row.model_name, row.input_tokens, row.output_tokens),
     }));
+    const knowledgeV2 = await new KnowledgeV2Repository(this.database).stats().catch(() => ({ cachedItems: 0, cachedChunks: 0, byVisibility: {}, byKind: {}, state: null, unavailable: true }));
     return {
       generatedAt: nowIso(), jobs: jsonRows(jobs.results), schedules: jsonRows(schedules.results),
       providers: jsonRows(providerSummary),
@@ -907,7 +922,14 @@ export class AdminObservatoryService {
         },
       },
       telegram: jsonRows(telegram.results),
-      knowledge: jsonRows(knowledge.results), errors: errors.results.map((row) => ({ ...row, category: this.errorCategory(row) })),
+      knowledge: jsonRows(knowledge.results),
+      knowledgeV2: {
+        baseUrl: this.runtimeConfig.knowledgeBaseUrl ?? "not configured",
+        configured: this.runtimeConfig.knowledgeConfigured === true,
+        effectiveScope: this.runtimeConfig.knowledgeScope ?? "management",
+        ...knowledgeV2,
+      },
+      errors: errors.results.map((row) => ({ ...row, category: this.errorCategory(row) })),
       audit: audit.results.map((row) => ({ ...row, payload: objectValue(row.payload_json) })), pressure: counts,
       turns: jsonRows(turns.results), artifacts: jsonRows(artifacts.results), humanTasks: jsonRows(taskState.results),
       health: {
@@ -1060,6 +1082,7 @@ export class AdminObservatoryService {
       const type = stringValue(row.title);
       if (type === "human_task.wake") return "human_task_mapping";
       if (type === "knowledge.sync_source") return "knowledge_fetch";
+      if (type === "knowledge.sync_v2" || type === "knowledge.full_reconcile") return "knowledge_v2_fetch";
       if (type === "god.review") return "god_execution";
       if (type === "diagram.render") return "diagram_render_failed";
     }

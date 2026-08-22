@@ -45,7 +45,7 @@ const PROPOSAL_MARKERS: readonly RegExp[] = [
   /not\s+(?:current|live)/iu,
 ];
 
-const CURRENT_EVIDENCE_TYPES = new Set(["decision", "memory_note"]);
+const CURRENT_EVIDENCE_TYPES = new Set(["decision", "memory_note", "knowledge_v2_item", "knowledge_v2_chunk"]);
 const OBSERVED_SIGNAL_MARKERS: readonly RegExp[] = [
   /داده/u,
   /اندازه[‌ ]گیری/u,
@@ -58,6 +58,13 @@ const OBSERVED_SIGNAL_MARKERS: readonly RegExp[] = [
   /conversion/iu,
   /retention/iu,
 ];
+
+function isCurrentKnowledgeEvidence(item: ContextPack["items"][number]): boolean {
+  const status = String(item.provenance.status ?? "").toLowerCase();
+  if (["archived", "deleted", "superseded", "retired"].includes(status)) return false;
+  const reviewAfter = Date.parse(String(item.provenance.reviewAfter ?? ""));
+  return !Number.isFinite(reviewAfter) || reviewAfter >= Date.now();
+}
 
 function termsFor(value: string): readonly string[] {
   return normalizeFtsQuery(value)
@@ -78,7 +85,7 @@ export function assessOfficialGrounding(
   const required = !options.currentStateQuestion
     && (contextPack.telemetry.queryIntent === "official_factual" || contextPack.telemetry.queryIntent === "mixed")
     && contextPack.telemetry.officialKnowledgeCount > 0;
-  const official = contextPack.items.filter((item) => item.type === "knowledge_chunk");
+  const official = contextPack.items.filter((item) => item.type === "knowledge_chunk" || item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk");
   const sourceIds = official.map((item) => item.sourceId);
   if (!required || official.length === 0) {
     return { required, satisfied: !required, sourceIds, matchedTerms: [], bestSourceMatchCount: 0 };
@@ -116,9 +123,14 @@ export function assessCurrentStateGrounding(content: string, contextPack: Contex
   }
 
   const evidenceKinds = [...new Set(contextPack.items.map((item) => item.type))];
-  const proposalItems = contextPack.items.filter((item) => PROPOSAL_MARKERS.some((pattern) => pattern.test(normalizeFtsQuery(item.excerpt).join(" "))));
+  const proposalItems = contextPack.items.filter((item) => {
+    const excerptMarkers = PROPOSAL_MARKERS.some((pattern) => pattern.test(normalizeFtsQuery(item.excerpt).join(" ")));
+    const epistemicType = String(item.provenance.epistemicType ?? item.provenance.type ?? "").toUpperCase();
+    return excerptMarkers || ["PROPOSAL", "HYPOTHESIS", "HISTORICAL"].includes(epistemicType);
+  });
   const currentEvidenceItems = contextPack.items.filter((item) =>
-    CURRENT_EVIDENCE_TYPES.has(item.type)
+    (CURRENT_EVIDENCE_TYPES.has(item.type) && isCurrentKnowledgeEvidence(item) && (item.type !== "knowledge_v2_item" && item.type !== "knowledge_v2_chunk"
+      || ["CURRENT_OPERATIONAL_DATA", "DECISION", "OFFICIAL_FACT", "EXPERIMENT_RESULT", "CUSTOMER_SIGNAL"].includes(String(item.provenance.epistemicType ?? "").toUpperCase())))
     || ((item.type === "message" || item.type === "thread_summary") && OBSERVED_SIGNAL_MARKERS.some((pattern) => pattern.test(normalizeFtsQuery(item.excerpt).join(" ")))),
   );
   const proposalOnly = proposalItems.length > 0 && currentEvidenceItems.length === 0;

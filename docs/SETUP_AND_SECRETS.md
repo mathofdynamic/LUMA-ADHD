@@ -16,6 +16,7 @@ These values identify a resource or select behavior. They are not authentication
 - `NORMAL_AGENT_PROVIDER`, `NORMAL_AGENT_BASE_URL`, `NORMAL_AGENT_MODEL`, and `NORMAL_AGENT_REASONING_EFFORT` - the normal-Agent provider contract. Production uses OpenAI `gpt-5.6-luna` with `medium` effort.
 - `NEBULA_BASE_URL` and `NEBULA_MODEL` - the retained Nebula fallback endpoint and model identifier. Nebula remains implemented and selectable, but is inactive in the current production configuration.
 - `GOD_PROVIDER`, `GOD_BASE_URL`, `GOD_MODEL`, and `GOD_REASONING_EFFORT` - the supervisory provider contract and reasoning policy. Production uses OpenAI `gpt-5.6-luna` with `xhigh` effort.
+- `LUMA_KNOWLEDGE_BASE_URL` - the non-secret Knowledge v2 API base; production uses `https://luma-knowledge.pages.dev/api/v1`.
 - `database_name`, `queue`, and Worker `name` in `wrangler.jsonc` - safe Cloudflare resource names.
 - `database_id` in `wrangler.jsonc` - a safe D1 resource identifier populated after the real database is created.
 
@@ -31,6 +32,7 @@ These values authenticate the application and must never be committed, placed in
 - `OPENAI_API_KEY` - the canonical shared OpenAI credential for normal Agents and GOD.
 - `GOD_API_KEY` - retained as a backward-compatible GOD credential during the migration; do not remove it until the shared key path is verified.
 - `ADMIN_AUTH_SECRET`.
+- `LUMA_KNOWLEDGE_API_TOKEN` - the server-side management-scoped Knowledge v2 credential. It is never returned to Admin, Telegram, the LLM, D1, or logs.
 - A future restricted Cloudflare API token used only by CI/CD.
 
 The tracked `.dev.vars.example` contains names and empty values only. Copy it to `.dev.vars`; the latter is protected by `.gitignore`. If a local Nebula key is needed for an operator smoke test, `.nebula-env` is also ignored and must never be committed.
@@ -85,9 +87,10 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put NEBULA_API_KEY
 npx wrangler secret put GOD_API_KEY
 npx wrangler secret put ADMIN_AUTH_SECRET
+npx wrangler secret put LUMA_KNOWLEDGE_API_TOKEN
 ```
 
-Use the appropriate Worker environment when staging and production configuration are introduced. Do not use `.dev.vars` as a production deployment mechanism. `NORMAL_AGENT_*` and `GOD_*` provider/model/reasoning settings are ordinary Worker configuration. `OPENAI_API_KEY` is the preferred shared credential; `GOD_API_KEY` remains a compatibility fallback until migration cleanup is explicitly approved. The operator-only `GPT_API_KEY` name is never read by the Worker. GOD never requires a Telegram GOD bot or `TELEGRAM_GOD_BOT_TOKEN`.
+Use the appropriate Worker environment when staging and production configuration are introduced. Do not use `.dev.vars` as a production deployment mechanism. `NORMAL_AGENT_*`, `GOD_*`, and `LUMA_KNOWLEDGE_BASE_URL` are ordinary Worker configuration. `OPENAI_API_KEY` is the preferred shared credential; `GOD_API_KEY` remains a compatibility fallback until migration cleanup is explicitly approved. `LUMA_KNOWLEDGE_API_TOKEN` is the only Knowledge credential read by the Worker and must retain `knowledge:read:management`; it must not be broadened to `RESTRICTED`. The operator-only `GPT_API_KEY` name is never read by the Worker. GOD never requires a Telegram GOD bot or `TELEGRAM_GOD_BOT_TOKEN`.
 
 Automatic deployment is not required by Phase 08. If a future manual workflow is added, use a restricted Cloudflare API token stored as a protected GitHub Actions secret. That token is separate from application runtime secrets and should have only the account permissions required to deploy this Worker.
 
@@ -138,5 +141,6 @@ powershell -File .\scripts\agent-ambient-smoke.ps1 -GroupId '<telegram group id>
 | Phase 06+ | Production admin authentication secret | Yes, admin secret |
 | Phase 08 | Hardening and deployment readiness | No for local/CI verification |
 | Post-v1 Luna migration | `OPENAI_API_KEY` for normal Agents and GOD; `GOD_API_KEY` retained during compatibility transition; Luna medium/xhigh configuration | Yes for production provider activation; never for deterministic CI |
+| Post-v1 Knowledge v2 | `LUMA_KNOWLEDGE_API_TOKEN` with `knowledge:read:management`; canonical API base in `LUMA_KNOWLEDGE_BASE_URL` | Yes for production Knowledge retrieval; never for deterministic CI |
 
-No credential is required for local Phase 08 development, `npm run verify`, or automated tests. Live Telegram validation requires the Phase 02 values above. Live normal-Agent/GOD validation additionally requires the selected OpenAI provider secret; Nebula remains available for an explicit fallback smoke. `GPT_API_KEY` is an operator-only local environment name, not a production Worker secret. `TELEGRAM_GOD_BOT_TOKEN` is never required.
+No credential is required for local Phase 08 development, `npm run verify`, or automated tests. Live Telegram validation requires the Phase 02 values above. Live normal-Agent/GOD validation additionally requires the selected OpenAI provider secret; Nebula remains available for an explicit fallback smoke. Live Knowledge v2 synchronization additionally requires the existing management-scoped `LUMA_KNOWLEDGE_API_TOKEN`; without it, deterministic local tests use fakes and the legacy source fallback remains available. `GPT_API_KEY` is an operator-only local environment name, not a production Worker secret. `TELEGRAM_GOD_BOT_TOKEN` is never required.

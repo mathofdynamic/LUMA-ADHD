@@ -40,6 +40,11 @@ GOD_BASE_URL=https://api.openai.com/v1
 GOD_MODEL=gpt-5.6-luna
 GOD_REASONING_EFFORT=xhigh
 
+# Canonical LUMA Knowledge v2 API. The token is a server-side secret and must
+# be installed separately; never place its value in this file.
+LUMA_KNOWLEDGE_BASE_URL=https://luma-knowledge.pages.dev/api/v1
+LUMA_KNOWLEDGE_API_TOKEN=
+
 # Admin authentication. Use a high-entropy local-only value for local admin tests.
 ADMIN_AUTH_SECRET=
 ADMIN_SESSION_TTL_SECONDS=43200

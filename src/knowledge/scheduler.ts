@@ -4,6 +4,7 @@ import type { AgentJobQueue } from "../agents/scheduler";
 import { OFFICIAL_LUMA_SOURCES } from "./sources";
 import { DEFAULT_RUNTIME_SETTINGS, loadEffectiveRuntimeSettings, type EffectiveRuntimeSettings } from "../admin/settings";
 import { countDailyAutonomyJobs } from "../autonomy-budgets";
+import { KnowledgeV2Repository } from "./v2-repository";
 
 type Repositories = ReturnType<typeof createRepositories>;
 
@@ -24,6 +25,7 @@ export class KnowledgeScheduler {
     private readonly queue: AgentJobQueue,
     private readonly now: () => string = nowIso,
     private readonly configuredSettings?: EffectiveRuntimeSettings,
+    private readonly knowledgeV2Enabled = false,
   ) {}
 
   async tick(): Promise<KnowledgeSchedulerResult> {
@@ -40,6 +42,26 @@ export class KnowledgeScheduler {
         idempotencyKey: `scheduler-budget:knowledge-sync:${asOf.slice(0, 10)}`,
         payload: { budget: "knowledge", used: dailySyncJobs, limit: settings.knowledgeDailySyncBudget },
       });
+      return { sourcesInitialized: (await this.repositories.knowledgeSources.listAll(100)).length, jobsCreated: 0 };
+    }
+    if (this.knowledgeV2Enabled) {
+      if (settings.schedulerWorkPerTick < 1) return { sourcesInitialized: (await this.repositories.knowledgeSources.listAll(100)).length, jobsCreated: 0 };
+      const state = await new KnowledgeV2Repository(this.repositories.database).getState();
+      const mode = state?.last_successful_at ? "incremental" : "full";
+      const slot = Math.floor(Date.parse(asOf) / (15 * 60_000));
+      const job = await this.repositories.jobs.create({
+        jobType: "knowledge.sync_v2",
+        payload: { mode, source: "scheduler" },
+        idempotencyKey: `knowledge-v2-sync:${mode}:${slot}`,
+        dueAt: asOf,
+        priority: 30,
+        maxAttempts: 2,
+      });
+      if (job.lastEnqueuedAt === null) {
+        await this.queue.send({ kind: "agent.job", jobId: job.id, depth: job.chainDepth, createdAt: asOf });
+        await this.repositories.jobs.markEnqueued(job.id, asOf);
+        return { sourcesInitialized: (await this.repositories.knowledgeSources.listAll(100)).length, jobsCreated: 1 };
+      }
       return { sourcesInitialized: (await this.repositories.knowledgeSources.listAll(100)).length, jobsCreated: 0 };
     }
     const due = await this.repositories.knowledgeSources.listDue(asOf, Math.min(1, settings.schedulerWorkPerTick));

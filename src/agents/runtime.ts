@@ -1085,6 +1085,24 @@ export class AgentRuntimeService {
           topK: 8,
           maxCharacters: context.settings.ragContextBudget,
         }));
+    let turnVisionInput: ResolvedVisionInput = context.visionInput
+      ? { present: true, fetchStatus: "available", dataUrl: context.visionInput.dataUrl, mimeType: context.visionInput.mimeType, byteLength: context.visionInput.byteLength }
+      : { present: context.capabilityManifest.currentImagePresent, fetchStatus: context.capabilityManifest.currentImageFetchStatus };
+    const knowledgeVisualQuestion = isImageInspectionQuestion(context.conversationFocus.primaryQuery)
+      || /(?:screenshot|screen|ui|ux|dashboard|visual|تصویر|اسکرین|رابط|صفحه)/iu.test(context.conversationFocus.retrievalQuery);
+    if (!turnVisionInput.dataUrl && !turnVisionInput.present && knowledgeVisualQuestion && this.dependencies.memory?.knowledgeV2) {
+      const mediaItem = contextPack.items.find((item) => item.provenance.media === true && typeof item.provenance.knowledgeItemId === "string");
+      if (mediaItem && typeof mediaItem.provenance.knowledgeItemId === "string") {
+        turnVisionInput = { present: true, fetchStatus: "available" };
+        try {
+          const image = await this.dependencies.memory.knowledgeV2.fetchMediaDataUrl(mediaItem.provenance.knowledgeItemId);
+          turnVisionInput = { present: true, fetchStatus: "available", dataUrl: image.dataUrl, mimeType: image.mimeType, byteLength: image.byteLength };
+        } catch (error: unknown) {
+          turnVisionInput = { present: true, fetchStatus: "download_failed", errorCategory: String(error).slice(0, 80) };
+        }
+      }
+    }
+    const capabilityManifest = this.capabilityManifest(turnVisionInput);
     const retrievalTelemetry: JsonObject = {
       ...contextPack.telemetry,
       sourceTypeCounts: { ...contextPack.telemetry.sourceTypeCounts },
@@ -1092,6 +1110,8 @@ export class AgentRuntimeService {
         ? contextPack.telemetry.selectedSources.map((source) => ({ ...source }))
         : [],
       retrievalSkippedReason: context.conversationFocus.retrievalSkippedReason,
+      knowledgeV2ImagesDelivered: capabilityManifest.currentImageDeliveredToModel ? 1 : 0,
+      knowledgeV2ImageFetchStatus: capabilityManifest.currentImageFetchStatus,
     };
     const participants = [
       ...context.profiles.map((profile) => ({
@@ -1124,7 +1144,7 @@ export class AgentRuntimeService {
       conversationFocus: context.conversationFocus,
       coveredDomains: context.coveredDomains,
       contributionRole: context.contributionRole,
-      capabilityManifest: context.capabilityManifest,
+      capabilityManifest,
       groupState: context.groupState,
       participants,
       humanDisplayName: human?.displayName,
@@ -1149,13 +1169,14 @@ export class AgentRuntimeService {
     ): Promise<LLMGenerateResponse> => {
       const startedAt = Date.now();
       try {
-        const providerMessages: readonly LLMMessage[] = context.visionInput
+        const visionDataUrl = turnVisionInput.dataUrl;
+        const providerMessages: readonly LLMMessage[] = visionDataUrl
           ? messages.map((message, index) => index === 0
             ? {
                 ...message,
                 content: [
                   ...(typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content),
-                  { type: "image_data" as const, dataUrl: context.visionInput!.dataUrl, detail: "auto" as const },
+                  { type: "image_data" as const, dataUrl: visionDataUrl, detail: "auto" as const },
                 ],
               }
             : message)
@@ -1179,8 +1200,8 @@ export class AgentRuntimeService {
           timeoutMs: FOUNDATION_GUARDRAILS.providerTimeoutMilliseconds,
           metadata: Object.fromEntries(Object.entries({
             ...metadata,
-            imageDeliveredToModel: context.capabilityManifest.currentImageDeliveredToModel,
-            imageFetchStatus: context.capabilityManifest.currentImageFetchStatus,
+            imageDeliveredToModel: capabilityManifest.currentImageDeliveredToModel,
+            imageFetchStatus: capabilityManifest.currentImageFetchStatus,
           }).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])),
         });
         await this.recordUsage(`provider-usage:${turn.id}:${usageSuffix}`, context.job, turn, generated, undefined, Date.now() - startedAt);
@@ -1378,7 +1399,7 @@ export class AgentRuntimeService {
           retrieval: retrievalTelemetry,
           grounding: groundingMetadata(grounding),
           acquisitionOperations,
-          capabilities: capabilityMetadata(context.capabilityManifest),
+          capabilities: capabilityMetadata(capabilityManifest),
         });
         return { action: null, outputMessageId: undefined, wait: false, retryableFailure: error.failure.retryable, stopBurst: true, repetitionSuppressed: false };
       }
@@ -1392,7 +1413,7 @@ export class AgentRuntimeService {
         retrieval: retrievalTelemetry,
         grounding: groundingMetadata(grounding),
         acquisitionOperations,
-        capabilities: capabilityMetadata(context.capabilityManifest),
+        capabilities: capabilityMetadata(capabilityManifest),
       });
       await this.dependencies.repositories.events.append({
         eventType: "runtime.action_validation_failed",
@@ -1421,7 +1442,7 @@ export class AgentRuntimeService {
       const capabilityGuard = enforceVisionCapabilityTruth({
         content: action.content ?? "",
         humanQuery: context.conversationFocus.primaryQuery,
-        capabilities: context.capabilityManifest,
+        capabilities: capabilityManifest,
       });
       if (capabilityGuard.guarded) {
         action = {
@@ -1545,7 +1566,7 @@ export class AgentRuntimeService {
       await this.dependencies.repositories.agentTurns.updateStatus(turn.id, "failed", undefined, {
         ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding, currentStateGrounding, repetitionSuppressed),
         executionFailure: safeErrorSummary(error),
-        capabilities: capabilityMetadata(context.capabilityManifest),
+        capabilities: capabilityMetadata(capabilityManifest),
       });
       await this.dependencies.repositories.events.append({
         eventType: "runtime.action_execution_failed",
@@ -1566,7 +1587,7 @@ export class AgentRuntimeService {
       outputMessageId,
       {
         ...actionMetadata(action, repairAttempts, retrievalTelemetry, acquisitionOperations, grounding, currentStateGrounding, repetitionSuppressed),
-        capabilities: capabilityMetadata(context.capabilityManifest),
+        capabilities: capabilityMetadata(capabilityManifest),
         provider: response.provider,
         model: response.model,
         requestId: response.requestId ?? null,
