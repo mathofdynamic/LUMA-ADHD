@@ -120,13 +120,13 @@ describe("LUMA Knowledge v2 derived cache and retrieval", () => {
     media: [record({ id: "media-dashboard", kind: "media", title: "Current dashboard", type: "SCREENSHOT", visibility: "PUBLIC", structured: { pageId: "dashboard", viewport: "desktop", captureDate: "2026-08-21" } })],
   } as const;
 
-  function fixtureFetcher(state: { fail?: boolean; incremental?: boolean }): typeof fetch {
+  function fixtureFetcher(state: { fail?: boolean; incremental?: boolean; restricted?: boolean }): typeof fetch {
     return async (input) => {
       const url = String(input);
       if (state.fail) throw new Error("offline");
       if (url.endsWith("/manifest")) return jsonResponse({ total: 5, visibility: ["PUBLIC", "INTERNAL", "MANAGEMENT"] });
       if (url.includes("/changes?")) return jsonResponse({ changes: state.incremental ? [baseRecords.people[0]] : [] });
-      if (url.endsWith("/items?limit=100")) return jsonResponse({ items: baseRecords.items });
+      if (url.endsWith("/items?limit=100")) return jsonResponse({ items: state.restricted ? [...baseRecords.items, record({ id: "restricted-secret", kind: "item", title: "Restricted", visibility: "RESTRICTED" })] : baseRecords.items });
       if (url.endsWith("/documents?limit=100")) return jsonResponse({ items: baseRecords.documents });
       if (url.endsWith("/people?limit=100")) return jsonResponse({ items: baseRecords.people });
       if (url.endsWith("/entities?limit=100")) return jsonResponse({ items: baseRecords.entities });
@@ -142,7 +142,8 @@ describe("LUMA Knowledge v2 derived cache and retrieval", () => {
   }
 
   it("bootstraps structured kinds, chunks documents, and exposes provenance", async () => {
-    const client = new LumaKnowledgeClient({ baseUrl: "https://knowledge.test/api/v1", token: "test-token", fetcher: fixtureFetcher({}) });
+    const fixtureState: { incremental?: boolean } = {};
+    const client = new LumaKnowledgeClient({ baseUrl: "https://knowledge.test/api/v1", token: "test-token", fetcher: fixtureFetcher(fixtureState) });
     const service = new KnowledgeV2Service(new KnowledgeV2Repository(repositories.database), client, () => "2026-08-22T12:00:00.000Z");
     const result = await service.sync("full");
     expect(result).toMatchObject({ mode: "full", records: 5 });
@@ -154,6 +155,12 @@ describe("LUMA Knowledge v2 derived cache and retrieval", () => {
     expect(workflow?.type).toBe("knowledge_v2_item");
     expect(workflow?.provenance.visibility).toBe("PUBLIC");
     expect(workflow?.pathOrUrl).toBe("/api/v1/items/product-workflow");
+    const personPack = await new ContextPackService(repositories.database).build({ query: "Mahsa Finance", topK: 6, maxCharacters: 4_000 });
+    expect(personPack.items.some((item) => item.provenance.knowledgeItemId === "person-mahsa")).toBe(true);
+    const mediaPack = await new ContextPackService(repositories.database).build({ query: "current dashboard screenshot", topK: 6, maxCharacters: 4_000 });
+    expect(mediaPack.items.some((item) => item.provenance.knowledgeItemId === "media-dashboard")).toBe(true);
+    fixtureState.incremental = true;
+    await expect(service.sync("incremental")).resolves.toMatchObject({ mode: "incremental", records: 1 });
   });
 
   it("preserves the last-good cache when the Knowledge API fails", async () => {
@@ -191,6 +198,14 @@ describe("LUMA Knowledge v2 derived cache and retrieval", () => {
     await service.searchForContext({ query: "current workflow", agentId: "agent-product", currentState: true });
     await service.searchForContext({ query: "current workflow", agentId: "agent-finance", currentState: true });
     expect(searchCalls).toBe(1);
+  });
+
+  it("does not cache restricted records returned by a mis-scoped fixture", async () => {
+    const client = new LumaKnowledgeClient({ baseUrl: "https://knowledge.test/api/v1", token: "test-token", fetcher: fixtureFetcher({ restricted: true }) });
+    const service = new KnowledgeV2Service(new KnowledgeV2Repository(repositories.database), client, () => "2026-08-22T12:30:00.000Z");
+    await service.sync("full");
+    const restricted = await repositories.database.prepare("SELECT COUNT(*) AS count FROM knowledge_v2_items WHERE visibility = 'RESTRICTED' AND deleted_at IS NULL").first<{ count: number }>();
+    expect(Number(restricted?.count ?? 0)).toBe(0);
   });
 });
 
