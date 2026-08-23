@@ -5,6 +5,7 @@ import { createRepositories } from "../src/database";
 import { KnowledgeApiError, LumaKnowledgeClient, normalizeKnowledgeRecord, type KnowledgeApiRecord } from "../src/knowledge/client";
 import { KnowledgeV2Repository } from "../src/knowledge/v2-repository";
 import { KnowledgeV2Service } from "../src/knowledge/v2-service";
+import { resolveVisualQuery, sortVisualMedia } from "../src/knowledge/visual-resolution";
 import { ContextPackService } from "../src/memory/retrieval";
 
 const repositories = createRepositories(env.DB);
@@ -221,6 +222,94 @@ describe("LUMA Knowledge v2 derived cache and retrieval", () => {
     });
     expect(searchCalls).toBe(1);
     expect(pack.telemetry.knowledgeV2LiveSearchUsed).toBe(true);
+  });
+
+  it("resolves a visual product alias to the canonical page instead of sidebar text", async () => {
+    const imageGenerationDesktop = record({
+      id: "visual-image-generation-desktop",
+      kind: "media",
+      title: "Image generation — desktop",
+      type: "SCREENSHOT",
+      summary: "The current image generation surface.",
+      tags: ["image", "generation", "product"],
+      structured: { pageId: "public-image-generation", route: "/service/img-gen", viewport: "desktop", captureDate: "2026-08-23" },
+    });
+    const imageGenerationMobile = record({
+      id: "visual-image-generation-mobile",
+      kind: "media",
+      title: "Image generation — mobile",
+      type: "SCREENSHOT",
+      summary: "The current mobile image generation surface.",
+      tags: ["image", "generation", "product"],
+      structured: { pageId: "public-image-generation", route: "/service/img-gen", viewport: "mobile", captureDate: "2026-08-23" },
+    });
+    const workflowStore = record({
+      id: "visual-workflow-store-sidebar",
+      kind: "media",
+      title: "Workflow Store — desktop",
+      summary: "The sidebar contains an image generation shortcut, but this screenshot is the workflow store.",
+      tags: ["workflow", "store", "sidebar"],
+      structured: { pageId: "dashboard-workflow-store", route: "/workflows/store", viewport: "desktop", captureDate: "2026-08-23" },
+    });
+    const repository = new KnowledgeV2Repository(repositories.database);
+    for (const media of [imageGenerationDesktop, imageGenerationMobile, workflowStore]) await repository.upsert(media, "2026-08-23T10:00:00.000Z");
+    const client = new LumaKnowledgeClient({
+      baseUrl: "https://knowledge.test/api/v1",
+      token: "test-token",
+      fetcher: async () => { throw new Error("unexpected live search"); },
+    });
+    const service = new KnowledgeV2Service(repository, client);
+    const query = "صفحه ساخت تصویر الان چه شکلیه و چه ایراد UXی داره؟";
+    const target = resolveVisualQuery(query);
+    expect(target.productConcept).toBe("image_generation");
+    expect(target.uxIntent).toBe(true);
+    expect(resolveVisualQuery("What is Workflow?").visualIntent).toBe(false);
+    expect(resolveVisualQuery("What does the image generation page look like?").visualIntent).toBe(true);
+
+    const desktop = await service.resolveVisualEvidence({ query });
+    expect(desktop.selectedMediaId).toBe(imageGenerationDesktop.id);
+    expect(desktop.selectedPageId).toBe("public-image-generation");
+    expect(desktop.selectedRoute).toBe("/service/img-gen");
+    expect(desktop.selectedViewport).toBe("desktop");
+    expect(desktop.selectionReason).toBe("canonical_page_match");
+    expect(desktop.candidates.find((candidate) => candidate.mediaId === workflowStore.id)?.score).toBeLessThan(
+      desktop.candidates.find((candidate) => candidate.mediaId === imageGenerationDesktop.id)?.score ?? Number.POSITIVE_INFINITY,
+    );
+
+    const mobile = await service.resolveVisualEvidence({ query: "نسخه موبایل صفحه ساخت تصویر چطوره؟" });
+    expect(mobile.selectedMediaId).toBe(imageGenerationMobile.id);
+    expect(mobile.selectedViewport).toBe("mobile");
+
+    const workflow = await service.resolveVisualEvidence({ query: "فروشگاه ورک‌فلو چه شکلیه؟" });
+    expect(workflow.selectedMediaId).toBe(workflowStore.id);
+    expect(workflow.selectedPageId).toBe("dashboard-workflow-store");
+
+    const pack = await new ContextPackService(repositories.database, service).build({ query, topK: 6, maxCharacters: 4_000 });
+    const mediaItems = pack.items.filter((item) => item.provenance.media);
+    expect(mediaItems).toHaveLength(1);
+    expect(mediaItems[0]?.provenance.knowledgeItemId).toBe(imageGenerationDesktop.id);
+    expect(pack.visualEvidence?.selectedMediaId).toBe(imageGenerationDesktop.id);
+  });
+
+  it("rejects a visual query when no screenshot reaches the confidence gate", async () => {
+    const records = [record({
+      id: "visual-unrelated-dashboard",
+      kind: "media",
+      title: "Current dashboard",
+      type: "SCREENSHOT",
+      tags: ["dashboard"],
+      structured: { pageId: "dashboard", route: "/dashboard", viewport: "desktop" },
+    })];
+    const candidates = sortVisualMedia(records, resolveVisualQuery("settings page screenshot"));
+    expect(candidates[0]?.score).toBeLessThan(12);
+    const repository = new KnowledgeV2Repository(repositories.database);
+    await repository.upsert(records[0]!, "2026-08-23T10:00:00.000Z");
+    const service = new KnowledgeV2Service(repository, new LumaKnowledgeClient({
+      baseUrl: "https://knowledge.test/api/v1", token: "test-token", fetcher: async () => jsonResponse({ items: [] }),
+    }));
+    const result = await service.resolveVisualEvidence({ query: "settings page screenshot" });
+    expect(result.selectedMediaId).toBeNull();
+    expect(result.selectionReason).toBe("below_confidence");
   });
 
   it("does not cache restricted records returned by a mis-scoped fixture", async () => {

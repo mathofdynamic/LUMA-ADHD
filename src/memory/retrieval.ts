@@ -4,6 +4,8 @@ import { nowIso } from "../database/ids";
 import type { MessageRecord } from "../database/types";
 import { MemoryNoteRepository, DecisionRecordRepository, ThreadSummaryRepository } from "./repositories";
 import type { ContextPack, ContextPackItem, MemoryActor, MemoryItemType } from "./types";
+import { isVisualIntentQuery } from "../knowledge/visual-resolution";
+import type { ResolvedVisualEvidence } from "../knowledge/visual-resolution";
 
 const MAX_QUERY_TERMS = 12;
 const MAX_TERM_LENGTH = 80;
@@ -226,6 +228,7 @@ export class ContextPackService {
     readonly recentMessages?: readonly MessageRecord[];
     readonly topK?: number;
     readonly maxCharacters?: number;
+    readonly visualEvidence?: ResolvedVisualEvidence | null;
   }): Promise<ContextPack> {
     const maxCharacters = Math.max(1_000, Math.min(input.maxCharacters ?? 6_000, 12_000));
     const queryIntent = classifyRetrievalIntent(input.query);
@@ -286,7 +289,7 @@ export class ContextPackService {
       : [];
     candidates.push(...retrieved, ...official);
     const currentState = /(?:current|today|latest|now|فعلی|امروز|الان|جدیدترین)/iu.test(input.query);
-    const visual = /(?:screenshot|screen|ui|ux|dashboard|تصویر|اسکرین|رابط|صفحه)/iu.test(input.query);
+    const visual = isVisualIntentQuery(input.query);
     // Explicit current/visual questions should get a bounded live snapshot even
     // when the derived cache has a matching hit. The Knowledge service exposes
     // updated-at semantics rather than a complete revision log, so a local hit
@@ -303,13 +306,28 @@ export class ContextPackService {
         currentState,
         visual,
         limit: Math.min(6, input.topK ?? 8),
+        visualEvidence: input.visualEvidence,
       })
       : null;
     if (knowledgeV2) candidates.push(...knowledgeV2.items);
+    const resolvedVisualEvidence = input.visualEvidence ?? knowledgeV2?.visualEvidence ?? null;
+    const selectedVisualMediaId = resolvedVisualEvidence?.selectedMediaId ?? null;
+    // Legacy callers can still provide a media context without Knowledge v2.
+    // Only apply the canonical-media gate when this turn actually resolved a
+    // v2 visual evidence object; otherwise preserve the existing local media
+    // retrieval behavior for non-v2 deployments and unit fixtures.
+    const shouldScopeVisualMedia = visual && (
+      input.visualEvidence !== undefined || knowledgeV2?.visualEvidence !== undefined
+    );
+    const mediaScopedCandidates = shouldScopeVisualMedia
+      ? candidates.filter((item) => !item.provenance.media || (selectedVisualMediaId !== null && item.provenance.knowledgeItemId === selectedVisualMediaId))
+      : candidates;
     // Once v2 has supplied relevant evidence, the legacy 12-source mirror is
     // only a compatibility fallback and must not create duplicate evidence.
-    const hasKnowledgeV2Evidence = candidates.some((item) => item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk");
-    const candidateUniverse = hasKnowledgeV2Evidence ? candidates.filter((item) => item.type !== "knowledge_chunk") : candidates;
+    const hasKnowledgeV2Evidence = mediaScopedCandidates.some((item) => item.type === "knowledge_v2_item" || item.type === "knowledge_v2_chunk");
+    const candidateUniverse = hasKnowledgeV2Evidence
+      ? mediaScopedCandidates.filter((item) => item.type !== "knowledge_chunk")
+      : mediaScopedCandidates;
     const deduped = [...new Map(candidateUniverse.map((item) => [`${item.type}:${item.sourceId}`, item])).values()]
       .sort((left, right) => right.score - left.score || right.updatedAt.localeCompare(left.updatedAt));
     const category = (item: ContextPackItem): "official" | "thread" | "workspace" | "supporting" => {
@@ -398,8 +416,18 @@ export class ContextPackService {
           knowledgeV2MediaSelected: knowledgeV2.telemetry.mediaSelected,
           knowledgeV2ImagesDelivered: knowledgeV2.telemetry.imagesDelivered,
           knowledgeV2ApiLatencyMs: knowledgeV2.telemetry.apiLatencyMs,
+          knowledgeV2VisualIntent: knowledgeV2.telemetry.visualIntent,
+          knowledgeV2VisualTarget: knowledgeV2.telemetry.visualTarget,
+          knowledgeV2MediaCandidates: knowledgeV2.telemetry.visualMediaCandidates,
+          knowledgeV2SelectedMediaId: knowledgeV2.telemetry.visualSelectedMediaId,
+          knowledgeV2SelectedPageId: knowledgeV2.telemetry.visualSelectedPageId,
+          knowledgeV2SelectedRoute: knowledgeV2.telemetry.visualSelectedRoute,
+          knowledgeV2SelectedViewport: knowledgeV2.telemetry.visualSelectedViewport,
+          knowledgeV2VisualSelectionReason: knowledgeV2.telemetry.visualSelectionReason,
+          knowledgeV2VisualReSearchUsed: knowledgeV2.telemetry.visualReSearchUsed,
         } : {}),
       },
+      visualEvidence: resolvedVisualEvidence,
     };
   }
 

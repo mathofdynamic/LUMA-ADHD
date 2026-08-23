@@ -1,5 +1,6 @@
 import type { AgentRecord, AgentSpecialtyRecord, AgentInterestRecord, ThreadRecord } from "../database/types";
 import { normalizeReputationDomain } from "../reputation/model";
+import { isUxIntentQuery, resolveVisualQuery } from "../knowledge/visual-resolution";
 
 export interface AgentCandidateProfile {
   readonly agent: AgentRecord;
@@ -47,6 +48,7 @@ export interface SelectionSignals {
   readonly relevanceScore: number;
   readonly phaseFit: boolean;
   readonly lexicalRelevance: number;
+  readonly intentRoutingBonus: number;
   readonly coverageBonus: number;
   readonly coveragePenalty: number;
   readonly ambientCooldownPenalty: number;
@@ -110,6 +112,24 @@ function lexicalRelevance(profile: AgentCandidateProfile, messageText: string): 
     if (overlap.has(token)) matches += 1;
   }
   return Math.min(24, matches * 4);
+}
+
+function specialistRoutingBonus(profile: AgentCandidateProfile, messageText: string): number {
+  const domain = normalizeReputationDomain((profile.specialties.find((item) => item.isPrimary) ?? profile.specialties[0])?.domain ?? "");
+  const uxIntent = isUxIntentQuery(messageText);
+  const visualTarget = resolveVisualQuery(messageText);
+  const visualPageIntent = visualTarget.visualIntent && visualTarget.productConcept !== null;
+  if (uxIntent) {
+    if (domain === "ux_creative") return 20;
+    if (domain === "product_strategy" || domain === "customer_experience") return 5;
+    if (domain === "critical_analysis") return 3;
+  }
+  if (visualPageIntent) {
+    if (domain === "ux_creative") return 8;
+    if (domain === "product_strategy" || domain === "customer_experience") return 4;
+    if (domain === "critical_analysis") return 2;
+  }
+  return 0;
 }
 
 function boundedRandom(rng: (() => number) | undefined): number {
@@ -186,7 +206,9 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
         score += 24;
         reasons.push("requested by another agent");
       }
-      const relevance = lexicalRelevance(profile, input.messageText);
+      const baseLexicalRelevance = lexicalRelevance(profile, input.messageText);
+      const intentRoutingBonus = specialistRoutingBonus(profile, input.messageText);
+      const relevance = Math.min(24, baseLexicalRelevance + intentRoutingBonus);
       if (relevance > 0) {
         score += relevance;
         // Relevance is intentionally a little more durable than recency.
@@ -198,6 +220,7 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
         reasons.push("lexical specialty or interest relevance");
         if (relevanceStabilityBonus > 0) reasons.push("relevance stability bonus");
       }
+      if (intentRoutingBonus > 0) reasons.push("explicit UX/UI or visual specialist routing");
       const phaseFit = profile.specialties.some((item) => phaseDomains.includes(normalizeReputationDomain(item.domain)));
       if (phaseFit && mode !== "social") {
         // Phase fit is useful relevance evidence, but must not become a
@@ -289,6 +312,7 @@ export function scoreCandidates(input: CandidateSelectionInput): readonly Scored
           relevanceScore,
           phaseFit,
           lexicalRelevance: relevance,
+          intentRoutingBonus,
           coverageBonus,
           coveragePenalty,
           ambientCooldownPenalty,

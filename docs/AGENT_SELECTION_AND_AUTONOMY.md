@@ -30,6 +30,12 @@ request observable; it never competes with a real specialist match. Ambient
 work may use phase fit to find a useful opportunity after the scheduler has
 confirmed that the Agent-level interval is due.
 
+Visual and UX language adds a bounded specialist-routing signal. Explicit UI,
+UX, interface, design, visual, or Persian equivalents make `ux_creative` the
+primary candidate for a visual critique; Product, Customer, and Critical
+Analysis remain possible secondary perspectives. Generic thread phase bonuses
+cannot make Growth win a narrow UX question.
+
 Interactive turns build a bounded `ConversationFocus` from the latest
 substantive human request, thread objective, current human nudge intent, the
 latest meaningful contribution, and the unresolved question. A reply such as

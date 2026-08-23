@@ -2,6 +2,7 @@ import { FOUNDATION_GUARDRAILS } from "../src/guardrails";
 import { AGENT_PROMPT_VERSION, TELEGRAM_PRESENTATION_GUIDANCE, assessContributionDuplication, assessCurrentStateGrounding, buildAgentPrompt, buildConversationFocus, capabilityManifestText, classifyConversationIntent, decideThreadContinuation, enforceVisionCapabilityTruth, groupStateSnapshotText, isObviousRepeatedContent, qualifyUnsupportedCurrentClaim } from "../src/agents";
 import { chooseCandidateFromScores, scoreCandidates } from "../src/agents/selection";
 import { knowledgeApiPath, normalizeKnowledgeRecord } from "../src/knowledge/client";
+import { resolveVisualQuery, sortVisualMedia, visualEvidenceFor } from "../src/knowledge/visual-resolution";
 
 interface EvalResult {
   readonly scenarioId: string;
@@ -741,6 +742,94 @@ const results: EvalResult[] = [];
     "PASS: reviewAfter is honored for current-state grounding",
     "PASS: stale evidence remains available as historical context",
   ]));
+}
+
+{
+  const query = "صفحه ساخت تصویر الان چه شکلیه و چه ایراد UXی داره؟";
+  const target = resolveVisualQuery(query);
+  const media = [
+    normalizeKnowledgeRecord({
+      id: "public-image-generation-desktop", kind: "media", title: "Image generation desktop",
+      pageId: "public-image-generation", route: "/service/img-gen", viewport: "desktop", tags: ["image", "generation"],
+      visibility: "PUBLIC", status: "current",
+    }),
+    normalizeKnowledgeRecord({
+      id: "dashboard-workflow-store-desktop", kind: "media", title: "Workflow Store desktop",
+      summary: "The sidebar includes an image generation shortcut, but this is the workflow store.",
+      pageId: "dashboard-workflow-store", route: "/workflows/store", viewport: "desktop", tags: ["workflow", "store"],
+      visibility: "PUBLIC", status: "current",
+    }),
+  ].filter((item): item is NonNullable<typeof item> => item !== null);
+  const ranked = sortVisualMedia(media, target);
+  const evidence = visualEvidenceFor(target, ranked);
+  results.push(evaluate("postv1-visual-canonical-page-resolution", [
+    assertion(target.productConcept === "image_generation", "Persian image-generation alias resolves to a canonical concept"),
+    assertion(target.uxIntent, "UX intent is preserved for specialist routing"),
+    assertion(ranked[0]?.pageId === "public-image-generation", "canonical page identity outranks incidental sidebar text"),
+    assertion(evidence.selectedMediaId === "public-image-generation-desktop", "desktop canonical screenshot passes the confidence gate"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-creative"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "canonical_visual_evidence",
+  }, [
+    "PASS: wrong-page media is not delivered merely because a sidebar mentions the requested tool",
+    "PASS: media URLs and binary content are absent from the diagnostic fixture",
+  ]));
+}
+
+{
+  const target = resolveVisualQuery("نسخه موبایل صفحه ساخت تصویر چطوره؟");
+  results.push(evaluate("postv1-visual-viewport-resolution", [
+    assertion(target.productConcept === "image_generation", "mobile image-generation alias resolves"),
+    assertion(target.viewport === "mobile", "explicit mobile language selects mobile viewport"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-creative"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "mobile_visual_evidence",
+  }, ["PASS: one screenshot is preferred unless comparison is explicitly requested"]));
+}
+
+{
+  const visualProfiles = [
+    profile(agent("agent-creative", "ux_creative"), "UX UI interface design and usability"),
+    profile(agent("agent-growth", "growth"), "acquisition distribution retention and growth"),
+  ];
+  const scored = scoreCandidates({
+    profiles: visualProfiles,
+    messageText: "صفحه ساخت تصویر چه ایراد UXی دارد؟",
+    thread: { state: "open", priority: 60 } as never,
+    mode: "interactive",
+    turnIndex: 0,
+    rng: () => 0,
+  });
+  results.push(evaluate("postv1-visual-ux-specialist-routing", [
+    assertion(scored[0]?.agentId === "agent-creative", "UX specialist is primary for an explicit UX critique"),
+    assertion(scored[0]?.signals.intentRoutingBonus === 20, "routing signal is visible and bounded"),
+    assertion(scored.find((item) => item.agentId === "agent-growth")?.signals.relevant === false, "phase-fit Growth is not interactive relevance by itself"),
+  ], {
+    turnCount: 1, selectedAgents: [scored[0]?.agentId ?? "none"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "ux_specialist_priority",
+  }, ["PASS: ordinary broad questions retain the existing diversity policy"]));
+}
+
+{
+  const sharedVisualEvidence = { mediaId: "public-image-generation-desktop", pageId: "public-image-generation", delivered: true };
+  const agentViews = ["agent-product", "agent-creative", "agent-customer"].map(() => sharedVisualEvidence);
+  results.push(evaluate("postv1-shared-visual-evidence", [
+    assertion(new Set(agentViews.map((view) => view.mediaId)).size === 1, "all responding Agents share one resolved media identity"),
+    assertion(agentViews.every((view) => view.pageId === "public-image-generation" && view.delivered), "shared evidence carries page identity and delivery truth"),
+  ], {
+    turnCount: agentViews.length, selectedAgents: ["agent-product", "agent-creative", "agent-customer"], publicMessageCount: 3, jobsCreated: 1, terminalReason: "shared_visual_evidence",
+  }, ["PASS: specialists interpret shared evidence differently without receiving inconsistent screenshots"]));
+}
+
+{
+  const target = resolveVisualQuery("settings page screenshot");
+  const candidate = normalizeKnowledgeRecord({
+    id: "unrelated-dashboard", kind: "media", title: "Current dashboard", pageId: "dashboard", route: "/dashboard", viewport: "desktop", visibility: "PUBLIC", status: "current",
+  });
+  const evidence = candidate ? visualEvidenceFor(target, sortVisualMedia([candidate], target)) : null;
+  results.push(evaluate("postv1-visual-confidence-gate", [
+    assertion(evidence?.selectedMediaId === null, "ambiguous visual evidence is withheld"),
+    assertion(evidence?.selectionReason === "below_confidence", "confidence failure is explicit for diagnostics"),
+  ], {
+    turnCount: 1, selectedAgents: ["agent-creative"], publicMessageCount: 1, jobsCreated: 1, terminalReason: "visual_evidence_unavailable",
+  }, ["PASS: no Agent is allowed to claim visual inspection without delivered image input"]));
 }
 
 const failed = results.filter((result) => !result.passed);

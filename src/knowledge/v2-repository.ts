@@ -220,6 +220,27 @@ export class KnowledgeV2Repository {
     return rows.results.map(mapItem);
   }
 
+  async listMedia(limit = 120): Promise<readonly KnowledgeV2CacheRecord[]> {
+    const rows = await this.database.prepare(
+      "SELECT * FROM knowledge_v2_items WHERE deleted_at IS NULL AND stale = 0 AND (lower(kind) LIKE '%media%' OR lower(kind) IN ('screenshot', 'screenshots')) ORDER BY updated_at DESC LIMIT ?",
+    ).bind(Math.min(Math.max(limit, 1), 200)).all<ItemRow>();
+    return rows.results.map(mapItem);
+  }
+
+  async getByKindAndId(kind: string, itemId: string): Promise<KnowledgeV2CacheRecord | null> {
+    const row = await this.database.prepare(
+      "SELECT * FROM knowledge_v2_items WHERE kind = ? AND item_id = ? AND deleted_at IS NULL LIMIT 1",
+    ).bind(kind, itemId).first<ItemRow>();
+    return row ? mapItem(row) : null;
+  }
+
+  async getMediaById(itemId: string): Promise<KnowledgeV2CacheRecord | null> {
+    const row = await this.database.prepare(
+      "SELECT * FROM knowledge_v2_items WHERE item_id = ? AND deleted_at IS NULL AND (lower(kind) LIKE '%media%' OR lower(kind) IN ('screenshot', 'screenshots')) LIMIT 1",
+    ).bind(itemId).first<ItemRow>();
+    return row ? mapItem(row) : null;
+  }
+
   async getState(): Promise<StateRow | null> {
     return this.database.prepare("SELECT * FROM knowledge_v2_sync_state WHERE state_key = 'default'").first<StateRow>();
   }

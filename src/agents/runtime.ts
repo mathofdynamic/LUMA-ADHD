@@ -63,6 +63,7 @@ import {
 } from "./capabilities";
 import { countDailyAutonomyJobs, nextUtcDay } from "../autonomy-budgets";
 import type { TelegramMediaFetcher } from "../telegram/media";
+import { isVisualIntentQuery, type ResolvedVisualEvidence } from "../knowledge/visual-resolution";
 
 type RuntimeRepositories = ReturnType<typeof createRepositories>;
 
@@ -109,6 +110,7 @@ interface TurnContext {
   readonly priorBurstContributions: readonly string[];
   readonly capabilityManifest: AgentCapabilityManifest;
   readonly visionInput?: { readonly dataUrl: string; readonly mimeType: string; readonly byteLength: number };
+  readonly visualEvidence?: ResolvedVisualEvidence | null;
   readonly groupState: AgentGroupStateSnapshot;
 }
 
@@ -528,6 +530,25 @@ export class AgentRuntimeService {
     const effectiveMode = input.mode === "interactive" && isLightweightInteractionIntent(conversationFocus.interactionIntent)
       ? "social" as const
       : input.mode;
+    const resolvedVisualEvidence = !visionInput.present
+      && effectiveMode !== "social"
+      && isVisualIntentQuery(conversationFocus.retrievalQuery || conversationFocus.primaryQuery)
+      && this.dependencies.memory?.knowledgeV2
+      ? await this.dependencies.memory.knowledgeV2.resolveVisualEvidence({
+        query: conversationFocus.retrievalQuery || conversationFocus.primaryQuery,
+        threadId: input.threadId,
+      })
+      : null;
+    const knowledgeVisionInput = resolvedVisualEvidence
+      ? await this.resolveKnowledgeVisionInput(resolvedVisualEvidence)
+      : { present: false, fetchStatus: "not_present" as const };
+    const sharedVisualEvidence = resolvedVisualEvidence
+      ? {
+          ...resolvedVisualEvidence,
+          delivered: this.dependencies.provider.name === "openai" && knowledgeVisionInput.dataUrl !== undefined,
+        }
+      : null;
+    const sharedVisionInput = visionInput.present ? visionInput : knowledgeVisionInput;
     const effectiveHardTurnLimit = effectiveMode === "interactive"
       ? FOUNDATION_GUARDRAILS.interactiveBurstMaxTurns
       : effectiveMode === "deep_work"
@@ -726,10 +747,11 @@ export class AgentRuntimeService {
         coveredDomains: [...coveredDomains],
         contributionRole,
         priorBurstContributions: [...priorBurstContributions],
-        capabilityManifest: this.capabilityManifest(visionInput),
-        ...(visionInput.dataUrl === undefined || visionInput.mimeType === undefined || visionInput.byteLength === undefined
+        capabilityManifest: this.capabilityManifest(sharedVisionInput),
+        visualEvidence: sharedVisualEvidence,
+        ...(sharedVisionInput.dataUrl === undefined || sharedVisionInput.mimeType === undefined || sharedVisionInput.byteLength === undefined
           ? {}
-          : { visionInput: { dataUrl: visionInput.dataUrl, mimeType: visionInput.mimeType, byteLength: visionInput.byteLength } }),
+          : { visionInput: { dataUrl: sharedVisionInput.dataUrl, mimeType: sharedVisionInput.mimeType, byteLength: sharedVisionInput.byteLength } }),
           groupState: this.groupStateSnapshot({
             profiles,
             mode: effectiveMode,
@@ -853,6 +875,31 @@ export class AgentRuntimeService {
     };
   }
 
+  private async resolveKnowledgeVisionInput(evidence: ResolvedVisualEvidence | null): Promise<ResolvedVisionInput> {
+    if (!evidence?.visualIntent) return { present: false, fetchStatus: "not_present" };
+    if (!evidence.selectedMediaId) {
+      return { present: false, fetchStatus: "unavailable", errorCategory: "knowledge_visual_media_unavailable" };
+    }
+    if (this.dependencies.provider.name !== "openai") {
+      return { present: true, fetchStatus: "unavailable", errorCategory: "provider_vision_unsupported" };
+    }
+    if (!this.dependencies.memory?.knowledgeV2) {
+      return { present: true, fetchStatus: "unavailable", errorCategory: "knowledge_v2_unconfigured" };
+    }
+    try {
+      const image = await this.dependencies.memory.knowledgeV2.fetchMediaDataUrl(evidence.selectedMediaId);
+      return {
+        present: true,
+        fetchStatus: "available",
+        dataUrl: image.dataUrl,
+        mimeType: image.mimeType,
+        byteLength: image.byteLength,
+      };
+    } catch (error: unknown) {
+      return { present: true, fetchStatus: "download_failed", errorCategory: String(error).slice(0, 80) };
+    }
+  }
+
   private capabilityManifest(visionInput: ResolvedVisionInput): AgentCapabilityManifest {
     const visionModelSupported = this.dependencies.provider.name === "openai";
     return {
@@ -925,6 +972,7 @@ export class AgentRuntimeService {
       neglectedOpportunityBoost: round(input.candidate.signals.neglectedOpportunityBoost),
       reputationSignal: round(input.candidate.signals.reputationSignal),
       lexicalRelevance: round(input.candidate.signals.lexicalRelevance),
+      intentRoutingBonus: round(input.candidate.signals.intentRoutingBonus),
       phaseFit: input.candidate.signals.phaseFit,
       perspectiveDomain: input.candidate.signals.perspectiveDomain,
       relevant: input.candidate.signals.relevant,
@@ -951,6 +999,7 @@ export class AgentRuntimeService {
         relevanceScore: round(candidate.relevanceScore),
         perspectiveDomain: candidate.signals.perspectiveDomain,
         lexicalRelevance: round(candidate.signals.lexicalRelevance),
+        intentRoutingBonus: round(candidate.signals.intentRoutingBonus),
         coverageBonus: round(candidate.signals.coverageBonus),
         coveragePenalty: round(candidate.signals.coveragePenalty),
         reasons: candidate.reasons.slice(0, 4),
@@ -1074,6 +1123,7 @@ export class AgentRuntimeService {
           actor: { agentId: agent.id },
           threadId: thread.id,
           recentMessages: context.recentMessages,
+          visualEvidence: context.visualEvidence,
           topK: 8,
           maxCharacters: context.settings.ragContextBudget,
         })
@@ -1082,26 +1132,13 @@ export class AgentRuntimeService {
           actor: { agentId: agent.id },
           threadId: thread.id,
           recentMessages: context.recentMessages,
+          visualEvidence: context.visualEvidence,
           topK: 8,
           maxCharacters: context.settings.ragContextBudget,
         }));
     let turnVisionInput: ResolvedVisionInput = context.visionInput
       ? { present: true, fetchStatus: "available", dataUrl: context.visionInput.dataUrl, mimeType: context.visionInput.mimeType, byteLength: context.visionInput.byteLength }
       : { present: context.capabilityManifest.currentImagePresent, fetchStatus: context.capabilityManifest.currentImageFetchStatus };
-    const knowledgeVisualQuestion = isImageInspectionQuestion(context.conversationFocus.primaryQuery)
-      || /(?:screenshot|screen|ui|ux|dashboard|visual|تصویر|اسکرین|رابط|صفحه)/iu.test(context.conversationFocus.retrievalQuery);
-    if (!turnVisionInput.dataUrl && !turnVisionInput.present && knowledgeVisualQuestion && this.dependencies.memory?.knowledgeV2) {
-      const mediaItem = contextPack.items.find((item) => item.provenance.media === true && typeof item.provenance.knowledgeItemId === "string");
-      if (mediaItem && typeof mediaItem.provenance.knowledgeItemId === "string") {
-        turnVisionInput = { present: true, fetchStatus: "available" };
-        try {
-          const image = await this.dependencies.memory.knowledgeV2.fetchMediaDataUrl(mediaItem.provenance.knowledgeItemId);
-          turnVisionInput = { present: true, fetchStatus: "available", dataUrl: image.dataUrl, mimeType: image.mimeType, byteLength: image.byteLength };
-        } catch (error: unknown) {
-          turnVisionInput = { present: true, fetchStatus: "download_failed", errorCategory: String(error).slice(0, 80) };
-        }
-      }
-    }
     const capabilityManifest = this.capabilityManifest(turnVisionInput);
     const retrievalTelemetry: JsonObject = {
       ...contextPack.telemetry,
@@ -1112,6 +1149,28 @@ export class AgentRuntimeService {
       retrievalSkippedReason: context.conversationFocus.retrievalSkippedReason,
       knowledgeV2ImagesDelivered: capabilityManifest.currentImageDeliveredToModel ? 1 : 0,
       knowledgeV2ImageFetchStatus: capabilityManifest.currentImageFetchStatus,
+      ...(context.visualEvidence ? {
+        visualEvidence: {
+          visualIntent: context.visualEvidence.visualIntent,
+          target: context.visualEvidence.target,
+          selectedMediaId: context.visualEvidence.selectedMediaId,
+          selectedPageId: context.visualEvidence.selectedPageId,
+          selectedRoute: context.visualEvidence.selectedRoute,
+          selectedViewport: context.visualEvidence.selectedViewport,
+          selectedCapturedAt: context.visualEvidence.selectedCapturedAt,
+          selectedContentHash: context.visualEvidence.selectedContentHash,
+          delivered: capabilityManifest.currentImageDeliveredToModel,
+          reSearchUsed: context.visualEvidence.reSearchUsed,
+          selectionReason: context.visualEvidence.selectionReason,
+          candidates: context.visualEvidence.candidates.slice(0, 8).map((candidate) => ({
+            mediaId: candidate.mediaId,
+            pageId: candidate.pageId,
+            route: candidate.route,
+            viewport: candidate.viewport,
+            score: candidate.score,
+          })),
+        },
+      } : {}),
     };
     const participants = [
       ...context.profiles.map((profile) => ({
