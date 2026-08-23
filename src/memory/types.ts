@@ -5,6 +5,7 @@ import type {
   ThreadId,
 } from "../database/types";
 import type { JsonObject } from "../database/validation";
+import type { ResolvedVisualEvidence } from "../knowledge/visual-resolution";
 
 export type MemoryItemType =
   | "document"
@@ -42,6 +43,7 @@ export interface ContextPack {
   readonly totalCharacters: number;
   readonly truncated: boolean;
   readonly telemetry: ContextPackTelemetry;
+  readonly visualEvidence?: ResolvedVisualEvidence | null;
 }
 
 export interface ContextPackTelemetry {
@@ -70,6 +72,21 @@ export interface ContextPackTelemetry {
   readonly knowledgeV2MediaSelected?: number;
   readonly knowledgeV2ImagesDelivered?: number;
   readonly knowledgeV2ApiLatencyMs?: number | null;
+  readonly knowledgeV2VisualIntent?: boolean;
+  readonly knowledgeV2VisualTarget?: string | null;
+  readonly knowledgeV2MediaCandidates?: readonly {
+    readonly mediaId: string;
+    readonly pageId: string | null;
+    readonly route: string | null;
+    readonly viewport: string | null;
+    readonly score: number;
+  }[];
+  readonly knowledgeV2SelectedMediaId?: string | null;
+  readonly knowledgeV2SelectedPageId?: string | null;
+  readonly knowledgeV2SelectedRoute?: string | null;
+  readonly knowledgeV2SelectedViewport?: string | null;
+  readonly knowledgeV2VisualSelectionReason?: string;
+  readonly knowledgeV2VisualReSearchUsed?: boolean;
 }
 
 export interface DocumentCreateRequest {

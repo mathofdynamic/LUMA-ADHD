@@ -41,7 +41,16 @@ Social and acknowledgement fast paths skip Knowledge retrieval. Casual conversat
 
 ## Media and multimodal reasoning
 
-Media metadata is first-class evidence. Search can select a current screenshot by page, route, title, tags, viewport, description, relation, and capture date. Media binary is fetched only when a visual question or visual Agent work materially requires it:
+Media metadata is first-class evidence. Visual queries first resolve a bounded
+canonical product/page concept (for example, image generation or Workflow
+Store), then rank page identity and route above incidental sidebar text. A
+confidence gate rejects a wrong or ambiguous screenshot instead of delivering
+it as evidence. Desktop is preferred unless the query explicitly requests
+mobile. The resolved media identity is shared across Agents handling one human
+turn, so each Agent receives the same visual evidence while retaining its own
+specialist interpretation. Search can select a current screenshot by page,
+route, title, tags, viewport, description, relation, and capture date. Media
+binary is fetched only when a visual question or visual Agent work materially requires it:
 
 1. authenticate to the Knowledge content endpoint;
 2. validate the approved redirect and strip the Knowledge authorization header before any provider-host request;

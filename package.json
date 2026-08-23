@@ -8,7 +8,7 @@
     "types": "wrangler types",
     "types:check": "wrangler types --check",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p admin/tsconfig.json --noEmit",
-    "test": "vitest run --config vitest.config.ts",
+    "test": "vitest run --config vitest.config.ts --maxWorkers=1",
     "eval": "esbuild evals/run-evals.ts --bundle --platform=node --format=esm --log-level=error --outfile=.eval.bundle.mjs && node .eval.bundle.mjs",
     "diagnose:agent-activity": "node scripts/diagnose-agent-activity.mjs",
     "diagnose:agent-prompt": "esbuild scripts/diagnose-agent-prompt.ts --bundle --platform=node --format=esm --log-level=error --outfile=.agent-prompt-diagnostic.bundle.mjs && node .agent-prompt-diagnostic.bundle.mjs",

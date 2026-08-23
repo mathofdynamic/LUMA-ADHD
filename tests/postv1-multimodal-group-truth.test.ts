@@ -5,6 +5,10 @@ import { createRepositories } from "../src/database";
 import { AgentRuntimeService } from "../src/agents/runtime";
 import { FakeProvider } from "../src/llm/fake";
 import { OpenAIProvider } from "../src/llm/openai";
+import type { LLMGenerateRequest, LLMGenerateResponse, LLMProvider } from "../src/llm/types";
+import { LumaKnowledgeClient, type KnowledgeApiRecord } from "../src/knowledge/client";
+import { KnowledgeV2Repository } from "../src/knowledge/v2-repository";
+import { createMemoryServices } from "../src/memory";
 import {
   enforceVisionCapabilityTruth,
   type AgentCapabilityManifest,
@@ -49,6 +53,13 @@ function baseMessage(messageId: number, workspace = groupId): Record<string, unk
   };
 }
 
+function imageResponse(): Response {
+  return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), {
+    status: 200,
+    headers: { "content-type": "image/png", "content-length": "8" },
+  });
+}
+
 class FakeTransport implements TelegramTransport {
   readonly calls: TelegramSendTextInput[] = [];
 
@@ -64,6 +75,30 @@ class SelectiveFailTransport extends FakeTransport {
       throw new TelegramTransportError("permanent_rejection", "controlled projection failure");
     }
     return super.sendTextMessage(input);
+  }
+}
+
+class RecordingVisionProvider implements LLMProvider {
+  readonly name = "openai";
+  readonly calls: LLMGenerateRequest[] = [];
+
+  async generate(request: LLMGenerateRequest): Promise<LLMGenerateResponse> {
+    this.calls.push(request);
+    return {
+      text: JSON.stringify({
+        intent: "WAIT",
+        content: null,
+        confidence: 0.8,
+        reason_summary: "No additional visual perspective is needed.",
+        target_agent_id: null,
+        target_thread_id: null,
+        metadata: {},
+      }),
+      provider: "openai",
+      model: request.modelKey,
+      finishReason: "stop",
+      latencyMs: 1,
+    };
   }
 }
 
@@ -436,6 +471,85 @@ describe("post-v1 Telegram multimodal and group truth", () => {
       imageFetchStatus: "available",
       imageCount: 1,
     });
+  });
+
+  it("resolves Knowledge visual evidence once and shares the same image with successive Agents", async () => {
+    const app = createTelegramApplication({ repositories, config: configWithRoster(), now: () => "2026-08-22T10:10:00.000Z" });
+    const updateId = 81_405;
+    const accepted = await app.ingest({
+      botAlias: "gateway",
+      receivedAt: "2026-08-22T10:10:00.000Z",
+      payload: {
+        update_id: updateId,
+        message: { ...baseMessage(updateId), text: "\u0635\u0641\u062d\u0647 \u0633\u0627\u062e\u062a \u062a\u0635\u0648\u06cc\u0631 \u0627\u0644\u0627\u0646 \u0686\u0647 \u0634\u06a9\u0644\u06cc\u0647\u061f" },
+      },
+    });
+    const mediaId = `runtime-shared-visual-${crypto.randomUUID()}`;
+    const mediaRecord: KnowledgeApiRecord = {
+      id: mediaId,
+      kind: "media",
+      category: "product",
+      type: "SCREENSHOT",
+      visibility: "PUBLIC",
+      language: "en",
+      status: "current",
+      authority: "OFFICIAL_FACT",
+      owner: null,
+      title: "Image generation desktop",
+      summary: "Current image-generation page screenshot.",
+      contentText: null,
+      structured: { pageId: "public-image-generation", route: "/service/img-gen", viewport: "desktop", captureDate: "2026-08-22" },
+      tags: ["image", "generation", "product"],
+      sourceUrl: null,
+      updatedAt: "2026-08-22T10:00:00.000Z",
+      createdAt: "2026-08-22T09:00:00.000Z",
+      reviewAfter: null,
+      contentHash: "runtime-shared-hash",
+      versionMarker: "v1",
+      deleted: false,
+    };
+    await new KnowledgeV2Repository(repositories.database).upsert(mediaRecord, "2026-08-22T10:10:00.000Z");
+    let contentFetches = 0;
+    const knowledgeClient = new LumaKnowledgeClient({
+      baseUrl: "https://knowledge.test/api/v1",
+      token: "test-token",
+      fetcher: async (input) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.includes("/content")) {
+          contentFetches += 1;
+          const response = imageResponse();
+          return response;
+        }
+        throw new Error("unexpected Knowledge call");
+      },
+    });
+    const provider = new RecordingVisionProvider();
+    const memory = createMemoryServices(repositories, { knowledgeClient });
+    const preEvidence = await memory.knowledgeV2?.resolveVisualEvidence({ query: "\u0635\u0641\u062d\u0647 \u0633\u0627\u062e\u062a \u062a\u0635\u0648\u06cc\u0631 \u0627\u0644\u0627\u0646 \u0686\u0647 \u0634\u06a9\u0644\u06cc\u0647\u061f" });
+    expect(preEvidence?.selectedMediaId).toBe(mediaId);
+    const mediaData = await memory.knowledgeV2!.fetchMediaDataUrl(mediaId);
+    expect(mediaData.mimeType).toBe("image/png");
+    contentFetches = 0;
+    const runtime = new AgentRuntimeService({
+      repositories,
+      provider,
+      memory,
+      modelKey: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      now: () => "2026-08-22T10:10:01.000Z",
+      rng: () => 0,
+    });
+
+    const result = await runtime.processJob(await repositories.jobs.getById(accepted.jobId as string));
+    expect(result?.turns).toBe(2);
+    expect(provider.calls).toHaveLength(2);
+    const turns = await repositories.agentTurns.listByJob(accepted.jobId as string, 4);
+    expect(contentFetches).toBe(1);
+    expect(provider.calls.every((call) => Array.isArray(call.messages[0]?.content)
+      && call.messages[0]?.content.some((part) => part.type === "image_data" && part.dataUrl.startsWith("data:image/png;base64,")))).toBe(true);
+    expect(turns).toHaveLength(2);
+    expect(turns.every((turn) => turn.metadata.capabilities?.imageDeliveredToModel === true)).toBe(true);
+    expect(turns.every((turn) => turn.metadata.retrieval?.visualEvidence?.selectedMediaId === mediaId)).toBe(true);
   });
 
   it("guards false image-capability claims when this turn did not receive an image", () => {

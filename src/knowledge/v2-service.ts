@@ -3,6 +3,15 @@ import type { EventRepository } from "../database/repositories/events";
 import type { ContextPackItem, MemoryItemType } from "../memory/types";
 import { knowledgeApiPath, KnowledgeApiError, LumaKnowledgeClient, type KnowledgeApiRecord } from "./client";
 import { KnowledgeV2Repository, knowledgeCacheKey } from "./v2-repository";
+import {
+  canonicalTargetQuery,
+  mediaDescriptor,
+  resolveVisualQuery,
+  sortVisualMedia,
+  visualEvidenceFor,
+  visualTargetKey,
+  type ResolvedVisualEvidence,
+} from "./visual-resolution";
 
 const MAX_MEDIA_BYTES = 4 * 1024 * 1024;
 const SUPPORTED_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
@@ -16,11 +25,27 @@ export interface KnowledgeV2Telemetry {
   readonly mediaSelected: number;
   readonly imagesDelivered: number;
   readonly apiLatencyMs: number | null;
+  readonly visualIntent?: boolean;
+  readonly visualTarget?: string | null;
+  readonly visualMediaCandidates?: readonly {
+    readonly mediaId: string;
+    readonly pageId: string | null;
+    readonly route: string | null;
+    readonly viewport: string | null;
+    readonly score: number;
+  }[];
+  readonly visualSelectedMediaId?: string | null;
+  readonly visualSelectedPageId?: string | null;
+  readonly visualSelectedRoute?: string | null;
+  readonly visualSelectedViewport?: string | null;
+  readonly visualSelectionReason?: string;
+  readonly visualReSearchUsed?: boolean;
 }
 
 export interface KnowledgeV2SearchResult {
   readonly items: readonly ContextPackItem[];
   readonly telemetry: KnowledgeV2Telemetry;
+  readonly visualEvidence?: ResolvedVisualEvidence | null;
 }
 
 function authorityScore(value: string | null, epistemicType: string | null = null): number {
@@ -34,11 +59,25 @@ function authorityScore(value: string | null, epistemicType: string | null = nul
   }[(selected ?? "").toUpperCase()] ?? 50;
 }
 
+function isMediaKind(kind: string): boolean {
+  const normalized = kind.trim().toLowerCase();
+  return normalized.includes("media") || normalized === "screenshot" || normalized === "screenshots";
+}
+
 function itemType(record: KnowledgeApiRecord): MemoryItemType {
   return record.kind.toLowerCase().includes("document") ? "knowledge_v2_chunk" : "knowledge_v2_item";
 }
 
 function excerpt(record: KnowledgeApiRecord): string {
+  if (isMediaKind(record.kind)) {
+    const descriptor = mediaDescriptor(record);
+    return [
+      record.title,
+      record.summary ?? "",
+      `pageId=${descriptor.pageId ?? "unknown"}; route=${descriptor.route ?? "unknown"}; viewport=${descriptor.viewport ?? "unknown"}; capturedAt=${descriptor.capturedAt ?? "unknown"}`,
+      record.tags.length > 0 ? `tags=${record.tags.join(",")}` : "",
+    ].filter(Boolean).join("\n").slice(0, 1_200);
+  }
   const text = [record.summary ?? "", record.contentText ?? "", JSON.stringify(record.structured)].join("\n").replace(/\s+/gu, " ").trim();
   return text.slice(0, 1_200);
 }
@@ -54,8 +93,8 @@ function contextItem(record: KnowledgeApiRecord, visualDelivered = false): Conte
       sourceKind: "knowledge_v2", knowledgeItemId: record.id, kind: record.kind,
       type: record.type, epistemicType: record.type, category: record.category, visibility: record.visibility,
       authority: record.authority, status: record.status, updatedAt: record.updatedAt,
-      reviewAfter: record.reviewAfter, sourceUrl: record.kind.toLowerCase().includes("media") ? null : record.sourceUrl,
-      ...(record.kind.toLowerCase().includes("media") ? { media: true, visualDelivered } : {}),
+      reviewAfter: record.reviewAfter, sourceUrl: isMediaKind(record.kind) ? null : record.sourceUrl,
+      ...(isMediaKind(record.kind) ? { media: true, visualDelivered } : {}),
     },
   };
 }
@@ -125,6 +164,7 @@ function toBase64(bytes: Uint8Array): string {
 
 export class KnowledgeV2Service {
   private readonly recentLiveSearches = new Map<string, { readonly at: number; readonly result: KnowledgeV2SearchResult }>();
+  private readonly recentVisualResolutions = new Map<string, { readonly at: number; readonly result: ResolvedVisualEvidence }>();
 
   constructor(
     readonly repository: KnowledgeV2Repository,
@@ -142,9 +182,46 @@ export class KnowledgeV2Service {
     readonly currentState?: boolean;
     readonly visual?: boolean;
     readonly limit?: number;
+    readonly visualEvidence?: ResolvedVisualEvidence | null;
   }): Promise<KnowledgeV2SearchResult> {
     const query = input.query.trim().slice(0, 300);
     if (!query || !this.configured) return { items: [], telemetry: emptyTelemetry() };
+    if (input.visual) {
+      const visualEvidence = input.visualEvidence ?? await this.resolveVisualEvidence({
+        query,
+        agentId: input.agentId,
+        threadId: input.threadId,
+      });
+      const selectedRecord = visualEvidence.selectedMediaId
+        ? await this.repository.getMediaById(visualEvidence.selectedMediaId)
+        : null;
+      const items = selectedRecord ? [contextItem(selectedRecord)] : [];
+      const telemetry: KnowledgeV2Telemetry = {
+        ...emptyTelemetry(),
+        liveSearchUsed: visualEvidence.reSearchUsed,
+        itemsSelected: items.length,
+        kinds: items.length > 0 ? [selectedRecord?.kind ?? "media"] : [],
+        freshestUpdatedAt: visualEvidence.selectedCapturedAt,
+        stale: false,
+        mediaSelected: items.length,
+        visualIntent: visualEvidence.visualIntent,
+        visualTarget: visualEvidence.target,
+        visualMediaCandidates: visualEvidence.candidates.map((candidate) => ({
+          mediaId: candidate.mediaId,
+          pageId: candidate.pageId,
+          route: candidate.route,
+          viewport: candidate.viewport,
+          score: candidate.score,
+        })),
+        visualSelectedMediaId: visualEvidence.selectedMediaId,
+        visualSelectedPageId: visualEvidence.selectedPageId,
+        visualSelectedRoute: visualEvidence.selectedRoute,
+        visualSelectedViewport: visualEvidence.selectedViewport,
+        visualSelectionReason: visualEvidence.selectionReason,
+        visualReSearchUsed: visualEvidence.reSearchUsed,
+      };
+      return { items, telemetry, visualEvidence };
+    }
     // The evidence pack is shared across Agents for the same bounded turn.
     // Agent identity changes the interpretation layer, not this factual search.
     const cacheKey = `${query}|${input.currentState ? "current" : "normal"}|${input.visual ? "visual" : "text"}|${Math.min(input.limit ?? 6, 8)}`;
@@ -163,7 +240,7 @@ export class KnowledgeV2Service {
         telemetry: {
           liveSearchUsed: true, itemsSelected: allowed.length, kinds: [...new Set(allowed.map((record) => record.kind))],
           freshestUpdatedAt: allowed.map((record) => record.updatedAt).filter((value): value is string => Boolean(value)).sort().at(-1) ?? null,
-          stale: false, mediaSelected: allowed.filter((record) => record.kind.toLowerCase().includes("media")).length,
+          stale: false, mediaSelected: allowed.filter((record) => isMediaKind(record.kind)).length,
           imagesDelivered: 0, apiLatencyMs: Date.now() - started,
         },
       } satisfies KnowledgeV2SearchResult;
@@ -175,6 +252,51 @@ export class KnowledgeV2Service {
       if (error instanceof KnowledgeApiError && (error.category === "unauthorized" || error.category === "forbidden")) throw error;
       return result;
     }
+  }
+
+  async resolveVisualEvidence(input: {
+    readonly query: string;
+    readonly agentId?: string;
+    readonly threadId?: string;
+  }): Promise<ResolvedVisualEvidence> {
+    const target = resolveVisualQuery(input.query.slice(0, 300));
+    if (!target.visualIntent || !this.configured) return visualEvidenceFor(target, [], false);
+    const cacheKey = visualTargetKey(target);
+    const cached = this.recentVisualResolutions.get(cacheKey);
+    if (cached && Date.now() - cached.at < 30_000) return cached.result;
+
+    let localRecords: readonly KnowledgeApiRecord[] = [];
+    try {
+      localRecords = await this.repository.listMedia(120);
+    } catch {
+      localRecords = [];
+    }
+    const currentRecords = localRecords.filter((record) => {
+      const status = record.status?.toLocaleLowerCase();
+      return !record.deleted && record.visibility !== "RESTRICTED" && record.visibility !== "UNKNOWN" && status !== "historical";
+    });
+    let candidates = sortVisualMedia(currentRecords, target);
+    let result = visualEvidenceFor(target, candidates, false);
+
+    if (!result.selectedMediaId) {
+      try {
+        const liveRecords = await this.client.search(canonicalTargetQuery(target), {
+          kind: "media",
+          ...(target.viewport ? { viewport: target.viewport } : {}),
+          limit: 8,
+        });
+        const allowed = liveRecords.filter((record) => record.visibility !== "RESTRICTED" && record.visibility !== "UNKNOWN" && !record.deleted);
+        for (const record of allowed.slice(0, 8)) await this.repository.upsert(record, this.now());
+        candidates = sortVisualMedia(mergeRecords([...currentRecords, ...allowed]), target);
+        result = visualEvidenceFor(target, candidates, true);
+      } catch (error: unknown) {
+        if (error instanceof KnowledgeApiError && (error.category === "unauthorized" || error.category === "forbidden")) throw error;
+        result = visualEvidenceFor(target, candidates, true);
+      }
+    }
+    if (!result.selectedMediaId && candidates.length === 0) await this.recordKnowledgeGap(input.query.slice(0, 240), input.agentId, input.threadId);
+    this.recentVisualResolutions.set(cacheKey, { at: Date.now(), result });
+    return result;
   }
 
   async fetchMediaDataUrl(id: string): Promise<{ readonly dataUrl: string; readonly mimeType: string; readonly byteLength: number }> {
