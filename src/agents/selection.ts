@@ -101,6 +101,7 @@ function lexicalRelevance(profile: AgentCandidateProfile, messageText: string): 
   const messageTokens = new Set(tokens(messageText));
   if (messageTokens.size === 0) return 0;
   const vocabulary = [
+    profile.agent.displayName,
     profile.agent.specialty,
     profile.agent.specialtyDescription,
     ...profile.specialties.map((item) => `${item.domain} ${item.description}`),

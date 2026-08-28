@@ -38,6 +38,17 @@ const AGENT_ID_BY_ALIAS: Readonly<Record<TelegramBotAlias, string | null>> = {
   heretic: "agent-heretic",
 };
 
+const NATURAL_AGENT_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  "agent-product": ["رادین", "radin"],
+  "agent-growth": ["آوا", "ava"],
+  "agent-creative": ["نیلا", "nila"],
+  "agent-technical": ["کیان", "kian"],
+  "agent-finance": ["مهسا", "mahsa"],
+  "agent-customer": ["سارا", "sara"],
+  "agent-operations": ["سام", "sam"],
+  "agent-heretic": ["کاوه", "kaveh"],
+};
+
 export interface TelegramBotIdentityConfig {
   readonly alias: TelegramBotAlias;
   readonly agentId: string | null;
@@ -173,6 +184,18 @@ function normalizeUsername(value: unknown, fieldName: string): string | null {
   return normalized;
 }
 
+function normalizeNaturalAddressText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/[\u200c\u200d\u200e\u200f]/gu, "")
+    .toLocaleLowerCase();
+}
+
+function containsNaturalAlias(text: string, alias: string): boolean {
+  const escaped = alias.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`, "iu").test(text);
+}
+
 export function parseTelegramConfig(source: object): TelegramConfig {
   const identities = parseBotIdentities(readString(source, "TELEGRAM_BOT_IDENTITIES_JSON"));
   const bots = new Map<TelegramBotAlias, TelegramBotIdentityConfig>();
@@ -243,6 +266,20 @@ export function resolveConfiguredAgent(
       (telegramUserId !== undefined && bot.telegramUserId === telegramUserId) ||
       (username !== undefined && bot.username === username)
     ) {
+      return bot.agentId;
+    }
+  }
+
+  return null;
+}
+
+/** Resolve a direct human address such as "رادین، ..." without requiring @username syntax. */
+export function resolveNaturalAgentAddress(config: TelegramConfig, text: string): string | null {
+  const normalized = normalizeNaturalAddressText(text);
+  for (const bot of config.bots.values()) {
+    if (!bot.agentId) continue;
+    const aliases = NATURAL_AGENT_ALIASES[bot.agentId] ?? [];
+    if (aliases.some((alias) => containsNaturalAlias(normalized, normalizeNaturalAddressText(alias)))) {
       return bot.agentId;
     }
   }

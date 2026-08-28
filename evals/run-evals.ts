@@ -3,6 +3,7 @@ import { AGENT_PROMPT_VERSION, TELEGRAM_PRESENTATION_GUIDANCE, assessContributio
 import { chooseCandidateFromScores, scoreCandidates } from "../src/agents/selection";
 import { knowledgeApiPath, normalizeKnowledgeRecord } from "../src/knowledge/client";
 import { resolveVisualQuery, sortVisualMedia, visualEvidenceFor } from "../src/knowledge/visual-resolution";
+import { parseTelegramConfig, resolveNaturalAgentAddress } from "../src/telegram/config";
 
 interface EvalResult {
   readonly scenarioId: string;
@@ -62,6 +63,41 @@ function evaluate(
 }
 
 const results: EvalResult[] = [];
+
+{
+  const telegramConfig = parseTelegramConfig({
+    TELEGRAM_GROUP_ID: "-100300400",
+    TELEGRAM_WEBHOOK_SECRET: "eval-secret",
+    TELEGRAM_BOT_IDENTITIES_JSON: JSON.stringify({ product: { username: "luma_product" } }),
+  });
+  const naturalAddress = resolveNaturalAgentAddress(
+    telegramConfig,
+    "برای صفحه ی اول سایت رو میگی \u0631\u0627\u062f\u06cc\u0646 ؟",
+  );
+  const ambientPrompt = buildAgentPrompt({
+    agent: agent("agent-operations", "operations", 10),
+    specialties: [{ domain: "operations", description: "execution and repeatability", priority: 1, isPrimary: true }],
+    interests: [],
+    thread: { id: "ambient-thread", title: "Old thread", state: "open", priority: 50, summary: null } as never,
+    wakeReason: "ambient_opportunity",
+    mode: "ambient",
+    recentMessages: [],
+  });
+  results.push(evaluate("conversation-reliability-boundaries", [
+    assertion(naturalAddress === "agent-product", "natural Persian Agent address routes to the canonical Agent"),
+    assertion(ambientPrompt.systemPrompt.includes("private by default"), "ambient public speech is private by default"),
+    assertion(ambientPrompt.systemPrompt.includes("recent substantive human work"), "ambient speech requires recent substantive human context"),
+  ], {
+    turnCount: 1,
+    selectedAgents: ["agent-product"],
+    publicMessageCount: 0,
+    jobsCreated: 1,
+    terminalReason: "conversation_boundary_guardrails",
+  }, [
+    "PASS: natural Agent addressing does not require Telegram @username metadata",
+    "PASS: stale autonomous work cannot begin an unrelated public conversation",
+  ]));
+}
 
 {
   const profiles = [
