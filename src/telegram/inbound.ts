@@ -3,6 +3,7 @@ import type { createRepositories } from "../database/repositories";
 import {
   TelegramConfigurationError,
   getTelegramBot,
+  resolveNaturalAgentAddress,
   resolveConfiguredAgent,
   type TelegramConfig,
 } from "./config";
@@ -54,7 +55,7 @@ function mentionedAgentId(
     }
   }
 
-  return null;
+  return resolveNaturalAgentAddress(config, text);
 }
 
 function replyAgentId(

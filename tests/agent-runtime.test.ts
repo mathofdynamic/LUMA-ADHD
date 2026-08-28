@@ -186,6 +186,25 @@ describe("Phase 03 action contract and provider boundary", () => {
     expect(usage?.count).toBe(4);
   });
 
+  it("uses one larger bounded structured-output repair budget after malformed JSON", async () => {
+    const provider = new FakeProvider()
+      .enqueueJson('{"intent":"SPEAK","content":"incomplete')
+      .enqueueJson(action("SPEAK", { content: "A complete repaired answer." }));
+    const context = await fixture("Recover this structured response.", { addressedAgentId: "agent-product" });
+
+    await runtime(provider).runInteractiveBurst({
+      job: context.job,
+      messageId: context.messageId,
+      threadId: context.threadId,
+      addressedAgentId: "agent-product",
+      wakeReason: "human_message",
+    });
+
+    expect(provider.calls[0]?.maxOutputTokens).toBe(512);
+    expect(provider.calls[1]?.maxOutputTokens).toBe(768);
+    expect(provider.calls[1]?.maxOutputTokens).toBeLessThanOrEqual(768);
+  });
+
   it("stops safely when the one structured-output repair also fails", async () => {
     const provider = new FakeProvider().enqueueJson("not-json").enqueueJson("still-not-json");
     const context = await fixture("Repair failure");
@@ -533,6 +552,63 @@ describe("Phase 03 bounded orchestration", () => {
       .bind(context.job.id)
       .first<{ count: number }>();
     expect(requests?.count).toBe(0);
+  });
+
+  it("keeps stale ambient SPEAK private instead of starting an unrelated Telegram conversation", async () => {
+    const provider = new FakeProvider().enqueueJson(action("SPEAK", { content: "An unsolicited strategic opening." }));
+    const transport = new FakeTelegramTransport();
+    const context = await fixture("An old unresolved strategic thread");
+    const ambientJob = await repositories.jobs.create({
+      id: testId("stale-ambient-job"),
+      jobType: "agent.ambient",
+      payload: { threadId: context.threadId },
+      idempotencyKey: testId("stale-ambient-key"),
+      dueAt: "2026-08-15T00:00:00.000Z",
+      maxAttempts: 2,
+    });
+    await env.DB.batch([
+      env.DB.prepare("UPDATE messages SET created_at = ? WHERE id = ?").bind("2026-08-13T00:00:00.000Z", context.messageId),
+      env.DB.prepare("UPDATE threads SET last_activity_at = ?, updated_at = ? WHERE id = ?")
+        .bind("2026-08-13T00:00:00.000Z", "2026-08-13T00:00:00.000Z", context.threadId),
+    ]);
+
+    const result = await runtime(provider, transport).runAmbientOpportunity(ambientJob, context.threadId);
+    const turn = (await repositories.agentTurns.listByJob(ambientJob.id))[0];
+    const suppressionEvent = await env.DB
+      .prepare("SELECT COUNT(*) AS count FROM events WHERE event_type = 'runtime.ambient_speech_suppressed' AND job_id = ?")
+      .bind(ambientJob.id)
+      .first<{ count: number }>();
+
+    expect(result.publicMessages).toBe(0);
+    expect(transport.calls).toHaveLength(0);
+    expect(turn?.status).toBe("completed");
+    expect(turn?.metadata.intent).toBe("WAIT");
+    expect((turn?.metadata.actionMetadata as Record<string, unknown>)?.ambientSpeechSuppressed).toBe(true);
+    expect(suppressionEvent?.count).toBe(1);
+  });
+
+  it("allows ambient SPEAK as a bounded follow-up to recent substantive human work", async () => {
+    const provider = new FakeProvider().enqueueJson(action("SPEAK", { content: "A timely follow-up to the active request." }));
+    const transport = new FakeTelegramTransport();
+    const context = await fixture("A recent unresolved work request");
+    const ambientJob = await repositories.jobs.create({
+      id: testId("recent-ambient-job"),
+      jobType: "agent.ambient",
+      payload: { threadId: context.threadId },
+      idempotencyKey: testId("recent-ambient-key"),
+      dueAt: "2026-08-15T00:00:00.000Z",
+      maxAttempts: 2,
+    });
+    await env.DB.batch([
+      env.DB.prepare("UPDATE messages SET created_at = ? WHERE id = ?").bind("2026-08-15T10:00:00.000Z", context.messageId),
+      env.DB.prepare("UPDATE threads SET last_activity_at = ?, updated_at = ? WHERE id = ?")
+        .bind("2026-08-15T10:00:00.000Z", "2026-08-15T10:00:00.000Z", context.threadId),
+    ]);
+
+    const result = await runtime(provider, transport).runAmbientOpportunity(ambientJob, context.threadId);
+
+    expect(result.publicMessages).toBe(1);
+    expect(transport.calls).toHaveLength(1);
   });
 });
 

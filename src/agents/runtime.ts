@@ -124,6 +124,9 @@ interface TurnExecutionResult {
   readonly superseded?: boolean;
 }
 
+const STRUCTURED_REPAIR_OUTPUT_TOKENS = 768;
+const AMBIENT_PUBLIC_HUMAN_CONTEXT_HOURS = 6;
+
 function stringField(payload: JsonObject, key: string): string | null {
   const value = payload[key];
   return typeof value === "string" && value.trim().length > 0 ? value : null;
@@ -190,6 +193,32 @@ function capabilityMetadata(manifest: AgentCapabilityManifest): JsonObject {
 
 function isRetryableProviderError(error: unknown): boolean {
   return error instanceof LLMProviderError ? error.failure.retryable : true;
+}
+
+interface AmbientPublicSpeechDecision {
+  readonly allowed: boolean;
+  readonly reason: string;
+  readonly lastHumanMessageAt: string | null;
+}
+
+function ambientPublicSpeechDecision(context: TurnContext, now: string): AmbientPublicSpeechDecision {
+  const latestHuman = [...context.recentMessages].reverse().find((message) => message.authorType === "human");
+  if (!latestHuman) {
+    return { allowed: false, reason: "no_recent_human_context", lastHumanMessageAt: null };
+  }
+
+  const ageMilliseconds = Date.parse(now) - Date.parse(latestHuman.createdAt);
+  const ageHours = ageMilliseconds / 3_600_000;
+  if (!Number.isFinite(ageHours) || ageHours < 0 || ageHours > AMBIENT_PUBLIC_HUMAN_CONTEXT_HOURS) {
+    return { allowed: false, reason: "human_context_is_stale", lastHumanMessageAt: latestHuman.createdAt };
+  }
+
+  const intent = classifyConversationIntent(latestHuman.contentText).interactionIntent;
+  if (intent === "social" || intent === "acknowledgement" || intent === "correction" || intent === "topic_reset" || intent === "roll_call") {
+    return { allowed: false, reason: "last_human_message_was_not_work_request", lastHumanMessageAt: latestHuman.createdAt };
+  }
+
+  return { allowed: true, reason: "recent_substantive_human_context", lastHumanMessageAt: latestHuman.createdAt };
 }
 
 function actionMetadata(
@@ -1313,7 +1342,7 @@ export class AgentRuntimeService {
             }),
           }],
           "repair",
-          256,
+          STRUCTURED_REPAIR_OUTPUT_TOKENS,
           { repair: "true", agentId: agent.id, threadId: thread.id },
         );
         return { step: parseAgentStep(repaired.text), response: repaired };
@@ -1579,6 +1608,38 @@ export class AgentRuntimeService {
               sharedTerms: duplicate.sharedTerms,
               reason: duplicate.reason,
             },
+          },
+        };
+      }
+    }
+    if (action.intent === "SPEAK" && context.turn.metadata.mode === "ambient") {
+      const ambientSpeech = ambientPublicSpeechDecision(context, this.now());
+      if (!ambientSpeech.allowed) {
+        await this.dependencies.repositories.events.append({
+          eventType: "runtime.ambient_speech_suppressed",
+          aggregateType: "agent_turn",
+          aggregateId: turn.id,
+          threadId: thread.id,
+          jobId: context.job.id,
+          actor: { type: "agent", agentId: agent.id },
+          idempotencyKey: `runtime-ambient-speech-suppressed:${turn.id}`,
+          payload: {
+            reason: ambientSpeech.reason,
+            lastHumanMessageAt: ambientSpeech.lastHumanMessageAt,
+          },
+        });
+        action = {
+          intent: "WAIT",
+          content: null,
+          confidence: Math.min(action.confidence, 0.8),
+          reasonSummary: "Ambient public speech requires a recent human request.",
+          targetAgentId: null,
+          targetThreadId: null,
+          metadata: {
+            ...action.metadata,
+            ambientSpeechSuppressed: true,
+            ambientSpeechSuppressionReason: ambientSpeech.reason,
+            lastHumanMessageAt: ambientSpeech.lastHumanMessageAt,
           },
         };
       }

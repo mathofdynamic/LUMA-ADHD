@@ -226,6 +226,7 @@ export function buildAgentPrompt(context: AgentPromptContext): BuiltAgentPrompt 
   const behavior = [
     "BEHAVIORAL PRIORITY",
     humanTriggered ? "Answer or advance the human's actual request first. Do not replace a direct answer with unrelated file work, experiments, or generic organizational activity." : "Autonomous work may update durable files or memory, REQUEST_AGENT, REQUEST_HUMAN when genuinely necessary, DRAW, or WAIT. Public speech is optional.",
+    ...(mode === "ambient" ? ["AMBIENT PUBLIC SPEECH: autonomous opportunities are private by default. Prefer useful file or memory work, REQUEST_AGENT, or WAIT. Do not start a Telegram conversation from a stale or inactive thread; SPEAK only as a direct, useful follow-up to recent substantive human work."] : []),
     "Read prior contributions. For later turns, add a materially new specialist perspective, challenge a weak assumption with evidence, fill a missing gap, synthesize distinct contributions when assigned, or WAIT. Never paraphrase the same point merely because you were selected.",
     `already_covered_perspectives: ${covered}; coverage is a soft aid and never overrides subject relevance.`,
     mode === "explicit_all_agents"

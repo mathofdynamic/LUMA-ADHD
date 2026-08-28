@@ -209,6 +209,21 @@ describe("Phase 02 Telegram ingress", () => {
     expect(followUpMessage.replyToMessageId).toBe(response.messageId);
   });
 
+  it("routes a natural-language Persian Agent address without requiring an @username", async () => {
+    const result = await application().ingest({
+      botAlias: "gateway",
+      receivedAt: "2026-08-14T08:00:03.000Z",
+      payload: telegramUpdate(20_007, 30_007, "برای صفحه ی اول سایت رو میگی رادین ؟"),
+    });
+
+    expect(result.status).toBe("accepted");
+    expect(result.addressedAgentId).toBe("agent-product");
+    const message = await repositories.messages.getById(result.messageId as string);
+    expect(message.metadata.addressedAgentId).toBe("agent-product");
+    const job = await repositories.jobs.getById(result.jobId as string);
+    expect(job.payload.addressedAgentId).toBe("agent-product");
+  });
+
   it("ignores messages from an unauthorized chat without creating a job", async () => {
     const result = await application().ingest({
       botAlias: "gateway",
